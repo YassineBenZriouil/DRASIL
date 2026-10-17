@@ -5,7 +5,9 @@ import { cancel, list } from './fs/engine';
 import { getLocations } from './fs/locations';
 import { cancelSearch, startSearch } from './fs/search';
 import { cacheInfo, clearCache, startSizes, watchSizes } from './fs/sizes';
+import { log } from './log';
 import { loadSettings, updateSettings } from './settings';
+import { setWatched } from './watch';
 import { isMenuEntries, popupMenu } from './menu';
 import { deleteItems, makeFolder, renameItem, trashItems } from './ops/simple';
 import { cancelTransfer, resolveConflict, transfer } from './ops/transfer';
@@ -154,9 +156,26 @@ export function registerIpc(): void {
         if (isId(id)) cancelSearch(event.sender, id);
     });
 
+    ipcMain.on('watch:set', (event, paths: unknown) => {
+        if (
+            Array.isArray(paths) &&
+            paths.length <= MAX_WATCH &&
+            paths.every(isPath)
+        )
+            setWatched(event.sender, paths);
+    });
+
+    // Errors in the window go to the local log too.
+    ipcMain.on('log:error', (_, message: unknown) => {
+        if (typeof message === 'string')
+            log('Window error', message.slice(0, 4000));
+    });
+
     ipcMain.handle('settings:get', () => loadSettings());
     // The patch is merged and fully re-validated in sanitizeSettings.
-    ipcMain.handle('settings:set', (_, patch: unknown) => updateSettings(patch));
+    ipcMain.handle('settings:set', (_, patch: unknown) =>
+        updateSettings(patch)
+    );
     ipcMain.handle('cache:info', () => cacheInfo());
     ipcMain.handle('cache:clear', () => clearCache());
 

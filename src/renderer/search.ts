@@ -158,6 +158,8 @@ export class Search {
         const found = `${this.found.toLocaleString()} found`;
         const checked = `${this.folders.toLocaleString()} folders checked`;
         const c = this.coverage;
+        // While busy, screen readers wait and announce only the final summary.
+        this.status.setAttribute('aria-busy', String(!c));
         if (!c) {
             this.status.textContent = `Searching… ${found} · ${checked}`;
             return;

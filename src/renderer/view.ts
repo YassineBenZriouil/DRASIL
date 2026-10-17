@@ -1,21 +1,49 @@
-import { CATEGORY_COLOR, fileCategory } from './filetypes';
+import {
+    CATEGORY_COLOR as DEFAULT_CATEGORY_COLOR,
+    fileCategory,
+    type FileCategory,
+} from './filetypes';
 import { layout } from './layout';
 import { isInside } from '../shared/paths';
 import type { Tree, TreeNode } from './model';
 
+// Canvas colors come from the theme tokens in style.css, so both themes share one definition.
 const COLORS = {
-    edge: 'rgba(127, 209, 168, 0.28)',
-    cluster: 'rgba(127, 209, 168, 0.35)',
-    folder: '#7fd1a8',
-    dim: '#56665f',
-    warn: '#e6b86a',
-    bad: '#e87f7f',
-    label: '#d8e2dc',
-    muted: '#7d8a84',
-    select: '#ffffff',
-    hover: 'rgba(255, 255, 255, 0.45)',
-    match: '#ffe066',
+    edge: '',
+    cluster: '',
+    folder: '',
+    dim: '',
+    warn: '',
+    bad: '',
+    label: '',
+    muted: '',
+    select: '',
+    hover: '',
+    match: '',
+    panel: '',
 };
+const CATEGORY_COLOR = { ...DEFAULT_CATEGORY_COLOR };
+
+function loadPalette(): void {
+    const css = getComputedStyle(document.documentElement);
+    const v = (name: string): string => css.getPropertyValue(name).trim();
+    Object.assign(COLORS, {
+        edge: v('--edge'),
+        cluster: v('--cluster'),
+        folder: v('--accent'),
+        dim: v('--dim'),
+        warn: v('--warn'),
+        bad: v('--bad'),
+        label: v('--text'),
+        muted: v('--muted'),
+        select: v('--select'),
+        hover: v('--hover'),
+        match: v('--match'),
+        panel: v('--panel'),
+    });
+    for (const cat of Object.keys(CATEGORY_COLOR) as FileCategory[])
+        CATEGORY_COLOR[cat] = v(`--cat-${cat}`) || DEFAULT_CATEGORY_COLOR[cat];
+}
 
 const TAU = Math.PI * 2;
 const mod = (a: number, m: number): number => ((a % m) + m) % m;
@@ -89,7 +117,10 @@ export class TreeView {
     private height = 0;
     private raf = 0;
     private ctx: CanvasRenderingContext2D;
-    private reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    // No glides, pulses or spinners when true (Settings → Animation, or the OS setting).
+    reducedMotion = false;
+    // Called after each layout pass, so other views (the list) can follow.
+    onLayout: () => void = () => {};
     // What the last frame drew, reused for hit-testing.
     private drawn: TreeNode[] = [];
     private edges: TreeNode[] = [];
@@ -109,8 +140,54 @@ export class TreeView {
         private handlers: ViewHandlers
     ) {
         this.ctx = canvas.getContext('2d')!;
+        loadPalette();
+        matchMedia('(prefers-color-scheme: dark)').addEventListener(
+            'change',
+            () => {
+                loadPalette();
+                this.invalidate();
+            }
+        );
         new ResizeObserver(() => this.resize()).observe(canvas);
+        this.watchPixelRatio();
         this.bindInput();
+    }
+
+    // Moving the window to a screen with a different pixel density doesn't resize the canvas,
+    // so watch for it explicitly to stay sharp.
+    private watchPixelRatio(): void {
+        matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener(
+            'change',
+            () => {
+                this.resize();
+                this.watchPixelRatio();
+            },
+            { once: true }
+        );
+    }
+
+    zoomBy(factor: number): void {
+        this.zoomAt(this.width / 2, this.height / 2, factor);
+    }
+
+    // Arrow keys on the canvas: up = parent, down = first child, left/right = siblings.
+    private step(key: string): void {
+        const t = this.selected ?? this.tree.root;
+        if (!t) return;
+        let next: TreeNode | null | undefined = null;
+        if (key === 'ArrowUp') next = t === this.tree.root ? null : t.parent;
+        else if (key === 'ArrowDown') {
+            if (t.node.kind === 'directory' && !t.expanded) this.tree.expand(t);
+            next = t.shown[0];
+        } else if (t.parent && t !== this.tree.root) {
+            const sibs = t.parent.shown;
+            const i = sibs.indexOf(t);
+            next = sibs[i + (key === 'ArrowRight' ? 1 : -1)];
+        }
+        if (next) {
+            this.select(next);
+            this.centerOn(next);
+        }
     }
 
     // Call after the tree changes. Layout runs on the next frame, throttled while folders stream in.
@@ -183,7 +260,7 @@ export class TreeView {
     private animateTo(scale: number, wx: number, wy: number): void {
         const ox = this.width / 2 - wx * scale;
         const oy = this.height / 2 - wy * scale;
-        if (this.reducedMotion.matches) {
+        if (this.reducedMotion) {
             this.scale = scale;
             this.ox = ox;
             this.oy = oy;
@@ -257,6 +334,7 @@ export class TreeView {
         this.layoutDirty = false;
         this.lastLayout = now;
         this.layoutCost = performance.now() - now;
+        this.onLayout();
     }
 
     private frame = (time: number): void => {
@@ -273,7 +351,7 @@ export class TreeView {
         this.collect();
 
         // Animate only what's on screen; off-screen nodes catch up when they come into view.
-        const snap = this.reducedMotion.matches;
+        const snap = this.reducedMotion;
         for (const t of this.drawn) {
             const dx = t.tx - t.x;
             const dy = t.ty - t.y;
@@ -285,11 +363,15 @@ export class TreeView {
                 t.y += dy * 0.18;
                 busy = true;
             }
-            if (t.node.state === 'loading' || this.tree.busy.has(t.node.path))
+            if (
+                !snap &&
+                (t.node.state === 'loading' || this.tree.busy.has(t.node.path))
+            )
                 busy = true;
         }
-        for (const t of this.clusters)
-            if (t.node.state === 'loading') busy = true;
+        if (!snap)
+            for (const t of this.clusters)
+                if (t.node.state === 'loading') busy = true;
 
         this.draw(time);
 
@@ -438,28 +520,59 @@ export class TreeView {
         const px = 1 / scale;
 
         // Branches: curves that leave the parent outward, then bend towards the child.
+        // Main branches are a little bolder and brighter than the fine outer ones.
         ctx.strokeStyle = COLORS.edge;
-        ctx.lineWidth = 1.2 * px;
-        for (const dashed of [false, true]) {
-            ctx.setLineDash(dashed ? [4 * px, 4 * px] : []);
-            ctx.beginPath();
-            for (const t of this.edges) {
-                if (Boolean(t.node.link) !== dashed) continue;
-                const p = t.parent!;
-                const mid = (p.radius + p.childRadius) / 2;
-                ctx.moveTo(p.x, p.y);
-                ctx.bezierCurveTo(
-                    p.radius === 0 ? p.x : Math.cos(p.angle) * mid,
-                    p.radius === 0 ? p.y : Math.sin(p.angle) * mid,
-                    Math.cos(t.angle) * mid,
-                    Math.sin(t.angle) * mid,
-                    t.x,
-                    t.y
-                );
+        const rootDepth = this.tree.root.depth;
+        const bucketOf = (t: TreeNode): number =>
+            Math.min(t.depth - rootDepth, 3) - 1;
+        const BRANCH = [
+            { width: 1.7, alpha: 1 },
+            { width: 1.35, alpha: 0.85 },
+            { width: 1.1, alpha: 0.7 },
+        ];
+        for (let bucket = 0; bucket < BRANCH.length; bucket++)
+            for (const dashed of [false, true]) {
+                ctx.lineWidth = BRANCH[bucket]!.width * px;
+                ctx.globalAlpha = BRANCH[bucket]!.alpha;
+                ctx.setLineDash(dashed ? [4 * px, 4 * px] : []);
+                ctx.beginPath();
+                for (const t of this.edges) {
+                    if (
+                        Boolean(t.node.link) !== dashed ||
+                        bucketOf(t) !== bucket
+                    )
+                        continue;
+                    const p = t.parent!;
+                    const mid = (p.radius + p.childRadius) / 2;
+                    ctx.moveTo(p.x, p.y);
+                    ctx.bezierCurveTo(
+                        p.radius === 0 ? p.x : Math.cos(p.angle) * mid,
+                        p.radius === 0 ? p.y : Math.sin(p.angle) * mid,
+                        Math.cos(t.angle) * mid,
+                        Math.sin(t.angle) * mid,
+                        t.x,
+                        t.y
+                    );
+                }
+                ctx.stroke();
             }
-            ctx.stroke();
-        }
+        ctx.globalAlpha = 1;
         ctx.setLineDash([]);
+
+        // A soft glow under the root marks the heart of the tree. Only one node glows,
+        // so it costs nothing at any size.
+        const root = this.tree.root;
+        if (this.drawn.includes(root)) {
+            ctx.save();
+            ctx.shadowColor = COLORS.folder;
+            ctx.shadowBlur = 24 * dpr;
+            ctx.globalAlpha = 0.35;
+            ctx.fillStyle = COLORS.folder;
+            ctx.beginPath();
+            ctx.arc(root.x, root.y, 12 * px, 0, TAU);
+            ctx.fill();
+            ctx.restore();
+        }
 
         // Crowded folders: one band along their children's ring, until you zoom in.
         for (const t of this.clusters) {
@@ -514,7 +627,7 @@ export class TreeView {
         const w = ctx.measureText(full).width + 16;
         const x = Math.min(d.x + 16, this.width - w - 4);
         const y = d.y + 20;
-        ctx.fillStyle = 'rgba(14, 18, 24, 0.95)';
+        ctx.fillStyle = COLORS.panel;
         ctx.strokeStyle = d.problem ? COLORS.warn : COLORS.folder;
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -589,7 +702,11 @@ export class TreeView {
         // Items being moved, copied or deleted pulse until the operation finishes.
         ctx.globalAlpha =
             (t.node.hidden ? 0.55 : 1) *
-            (busy ? 0.45 + 0.35 * Math.sin(time / 200) : 1);
+            (busy
+                ? this.reducedMotion
+                    ? 0.5
+                    : 0.45 + 0.35 * Math.sin(time / 200)
+                : 1);
         ctx.lineWidth = 1.5 * px;
         if (t.node.kind === 'directory') this.drawFolder(t, r, px, time);
         else this.drawLeaf(t, r, px);
@@ -609,9 +726,15 @@ export class TreeView {
             ctx.globalAlpha = 1;
             ctx.strokeStyle = selected ? COLORS.select : COLORS.hover;
             ctx.lineWidth = (t === this.selected ? 2 : 1.5) * px;
+            // The main selection gets a faint glow so it's easy to find again.
+            if (t === this.selected) {
+                ctx.shadowColor = COLORS.select;
+                ctx.shadowBlur = 8 * devicePixelRatio;
+            }
             ctx.beginPath();
             ctx.arc(t.x, t.y, r + 4 * px, 0, TAU);
             ctx.stroke();
+            ctx.shadowBlur = 0;
         }
         if (t === this.itemDrag?.target) {
             ctx.globalAlpha = 1;
@@ -678,7 +801,10 @@ export class TreeView {
                 ctx.strokeStyle = COLORS.dim;
                 circle();
                 ctx.stroke();
-                const a = (time / 300) % TAU;
+                // A still arc when motion is reduced; the text status still says "loading".
+                const a = this.reducedMotion
+                    ? -Math.PI / 2
+                    : (time / 300) % TAU;
                 ctx.strokeStyle = COLORS.folder;
                 ctx.lineWidth = 2.5 * px;
                 ctx.beginPath();
@@ -956,29 +1082,20 @@ export class TreeView {
                 this.invalidate();
             } else if (e.key === 'Escape' && this.selection.size) {
                 this.select(null);
-            } else if (
-                e.key === 'ContextMenu' ||
-                (e.shiftKey && e.key === 'F10')
-            ) {
-                e.preventDefault();
-                const [x, y] = t
-                    ? this.screenPos(t)
-                    : [this.width / 2, this.height / 2];
-                this.handlers.menu(x, y);
             } else if (e.key === 'Enter' && t && t.node.kind !== 'directory') {
                 e.preventDefault();
                 this.handlers.open(t);
             } else if ((e.key === 'Enter' || e.key === ' ') && t) {
                 e.preventDefault();
                 this.tree.toggle(t);
-            } else if (e.key === 'Home') {
-                this.fit();
-            } else if (e.key === '+' || e.key === '=') {
-                this.zoomAt(this.width / 2, this.height / 2, 1.25);
-            } else if (e.key === '-') {
-                this.zoomAt(this.width / 2, this.height / 2, 0.8);
-            } else if (e.key === 'F9') {
-                this.toggleStats();
+            } else if (
+                e.key.startsWith('Arrow') &&
+                !e.altKey &&
+                !e.ctrlKey &&
+                !e.metaKey
+            ) {
+                e.preventDefault();
+                this.step(e.key);
             }
         });
     }

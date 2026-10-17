@@ -9,7 +9,8 @@
         <title>Drasil</title>
         <link rel="stylesheet" href="./style.css" />
     </head>
-    <body>
+    <body data-layout="tree">
+        <button id="skip" class="skip-link">Skip to files</button>
         <header>
             <h1>Drasil</h1>
             <div class="group" role="toolbar" aria-label="History">
@@ -55,16 +56,38 @@
                 >
                     Details
                 </button>
+                <button
+                    id="toggle-list"
+                    title="Show or hide the list view (L)"
+                    aria-pressed="false"
+                    aria-controls="listview"
+                >
+                    List
+                </button>
+                <button id="open-settings" title="Settings (Ctrl+,)">
+                    Settings
+                </button>
             </div>
         </header>
         <nav id="crumbs" aria-label="Path"></nav>
         <main>
             <div class="stage">
-                <canvas
-                    id="world"
-                    tabindex="0"
-                    aria-label="File tree. Click a folder to open or close it, double-click to make it the root. Double-click a file to open it. Ctrl-click (Cmd-click on Mac) selects several items. Drag empty space to move around, drag items onto a folder to move them (hold Ctrl, or Option on Mac, to copy). Right-click or press the menu key for actions. Scroll to zoom. Enter opens, Home shows the whole tree, C centers the selection, Escape clears the selection, plus and minus zoom, F9 shows performance stats."
-                ></canvas>
+                <div
+                    id="listview"
+                    role="tree"
+                    aria-label="Files"
+                    aria-multiselectable="true"
+                    data-own-keys
+                    tabindex="-1"
+                ></div>
+                <div class="canvas-wrap">
+                    <div id="tips" role="note" aria-label="Tips" hidden></div>
+                    <canvas
+                        id="world"
+                        tabindex="0"
+                        aria-label="File tree. Arrow keys move between items: up to the parent, down into a folder, left and right between neighbours. Enter opens, Space or click selects, Ctrl-click selects several. Drag items onto a folder to move them. The menu key or Shift+F10 shows actions. For a list that screen readers can browse, press L. Press F1 for all keyboard shortcuts."
+                    ></canvas>
+                </div>
                 <section
                     id="search-panel"
                     class="panel left"
@@ -94,7 +117,7 @@
         </main>
         <div id="notices" role="status" aria-live="polite"></div>
         <footer>
-            <div id="status" aria-live="polite"></div>
+            <div id="status"></div>
             <div id="ops"></div>
             <div id="filter-status" role="status"></div>
             <div id="activity"></div>
@@ -108,7 +131,10 @@
                 <span>△ error</span>
             </div>
         </footer>
+        <div id="announce" class="sr-only" aria-live="polite"></div>
         <dialog id="dialog"></dialog>
+        <dialog id="settings"></dialog>
+        <dialog id="welcome"></dialog>
         <script type="module" src="./main.ts"></script>
     </body>
 </html>

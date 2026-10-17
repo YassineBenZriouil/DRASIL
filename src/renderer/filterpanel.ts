@@ -74,6 +74,7 @@ function checkbox(
 
 export class FilterPanel {
     filter: Filter = defaultFilter();
+    private hiddenDefault = true;
     top: TreeNode[] = [];
     private panel = document.getElementById('filters-panel')!;
     private statusEl = document.getElementById('filter-status')!;
@@ -99,7 +100,20 @@ export class FilterPanel {
 
     clear(): void {
         const { sortBy, highlight } = this.filter;
-        this.filter = { ...defaultFilter(), sortBy, highlight };
+        this.filter = {
+            ...defaultFilter(),
+            showHidden: this.hiddenDefault,
+            sortBy,
+            highlight,
+        };
+        this.build();
+        this.changed();
+    }
+
+    // Settings → "Show hidden items by default".
+    setHiddenDefault(show: boolean): void {
+        this.hiddenDefault = show;
+        this.filter = { ...this.filter, showHidden: show };
         this.build();
         this.changed();
     }

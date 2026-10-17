@@ -9,6 +9,8 @@ import type { SizeRequest } from './size-worker';
 import createWorker from './size-worker?nodeWorker';
 
 let worker: Worker | null = null;
+let lastStart: SizeRequest | null = null;
+let crashes: number[] = [];
 // Only one window explores at a time; the latest one to start a calculation gets the updates.
 let owner: WebContents | null = null;
 
@@ -22,8 +24,23 @@ function post(msg: SizeRequest): void {
             if (owner && !owner.isDestroyed()) owner.send('size:event', event);
         });
         w.on('error', (err) => console.error('Size worker failed:', err));
-        w.on('exit', () => {
+        w.on('exit', (code) => {
             worker = null;
+            // Ask the window to start over, so totals never stay stuck at "calculating".
+            // At most a few restarts a minute, so a folder that always crashes it can't loop forever.
+            const now = Date.now();
+            crashes = crashes.filter((t) => now - t < 60_000);
+            crashes.push(now);
+            if (
+                code !== 0 &&
+                crashes.length <= 3 &&
+                lastStart &&
+                owner &&
+                !owner.isDestroyed()
+            )
+                owner.send('size:event', {
+                    type: 'restart',
+                } satisfies SizeEvent);
         });
         worker = w;
     }
@@ -33,12 +50,13 @@ function post(msg: SizeRequest): void {
 export function startSizes(root: string, sender: WebContents): void {
     owner = sender;
     const name = createHash('sha1').update(root).digest('hex');
-    post({
+    lastStart = {
         type: 'start',
         root,
         cacheFile: join(cacheDir(), `sizes-${name}.json`),
         excludes: currentSettings()?.excludes ?? [],
-    });
+    };
+    post(lastStart);
 }
 
 export function watchSizes(paths: string[], sender: WebContents): void {
@@ -48,7 +66,12 @@ export function watchSizes(paths: string[], sender: WebContents): void {
 export async function cacheInfo(): Promise<{ files: number; bytes: number }> {
     const names = await readdir(cacheDir()).catch(() => [] as string[]);
     const sizes = await Promise.all(
-        names.map((n) => stat(join(cacheDir(), n)).then((s) => s.size, () => 0))
+        names.map((n) =>
+            stat(join(cacheDir(), n)).then(
+                (s) => s.size,
+                () => 0
+            )
+        )
     );
     return { files: names.length, bytes: sizes.reduce((a, b) => a + b, 0) };
 }

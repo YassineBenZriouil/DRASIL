@@ -3,7 +3,14 @@
 // Totals from the last full walk of a root are saved to a local cache file and shown, clearly marked
 // as possibly out of date, until fresh numbers arrive.
 import type { Dirent } from 'node:fs';
-import { lstat, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import {
+    lstat,
+    mkdir,
+    readdir,
+    readFile,
+    rename,
+    writeFile,
+} from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { parentPort } from 'node:worker_threads';
 import type { SizeEvent, SizeInfo } from '../../shared/fs-types';
@@ -36,7 +43,9 @@ interface SavedFile {
 }
 
 const fold =
-    process.platform === 'linux' ? (s: string) => s : (s: string) => s.toLowerCase();
+    process.platform === 'linux'
+        ? (s: string) => s
+        : (s: string) => s.toLowerCase();
 
 // Only shallow folders and watched folders are kept, so memory stays bounded on huge disks.
 const CACHE_DEPTH = 2;
@@ -151,7 +160,8 @@ function flush(): void {
                 path,
                 bytes: acc.bytes,
                 items: acc.items,
-                state: acc.readable && !acc.excluded ? 'complete' : 'incomplete',
+                state:
+                    acc.readable && !acc.excluded ? 'complete' : 'incomplete',
                 excluded: acc.excluded || undefined,
             });
     }
@@ -185,10 +195,19 @@ function flush(): void {
 
 setInterval(flush, FLUSH_MS);
 
-async function loadSaved(file: string, root: string, gen: number): Promise<void> {
+async function loadSaved(
+    file: string,
+    root: string,
+    gen: number
+): Promise<void> {
     try {
         const data = JSON.parse(await readFile(file, 'utf8')) as SavedFile;
-        if (gen !== generation || data.root !== root || !Array.isArray(data.entries)) return;
+        if (
+            gen !== generation ||
+            data.root !== root ||
+            !Array.isArray(data.entries)
+        )
+            return;
         saved = new Map(
             data.entries.map(([p, bytes, items, readable, excluded]) => [
                 p,
@@ -203,8 +222,13 @@ async function loadSaved(file: string, root: string, gen: number): Promise<void>
 
 async function save(file: string, root: string): Promise<void> {
     const entries: SavedFile['entries'] = [];
-    for (const [p, a] of cache) entries.push([p, a.bytes, a.items, a.readable, a.excluded]);
-    const data: SavedFile = { root, savedAt: Date.now(), entries: entries.slice(0, 50_000) };
+    for (const [p, a] of cache)
+        entries.push([p, a.bytes, a.items, a.readable, a.excluded]);
+    const data: SavedFile = {
+        root,
+        savedAt: Date.now(),
+        entries: entries.slice(0, 50_000),
+    };
     try {
         await mkdir(dirname(file), { recursive: true });
         await writeFile(file + '.tmp', JSON.stringify(data));

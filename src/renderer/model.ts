@@ -125,6 +125,7 @@ export class Tree {
     constructor(private onChange: (kind: ChangeKind) => void) {
         api.onListEvent((event) => this.handle(event));
         api.onSizeEvent((event) => {
+            if (event.type === 'restart') return this.restartSizes();
             if (event.type === 'sizes')
                 for (const s of event.sizes) this.sizes.set(s.path, s);
             else this.sizeProgress = event;

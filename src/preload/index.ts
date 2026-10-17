@@ -35,6 +35,9 @@ const api: DrasilApi = {
     cancelOp: (id) => ipcRenderer.send('op:cancel', id),
     onOpEvent: (callback) => subscribe('op:event', callback),
     copyText: (text) => ipcRenderer.send('clipboard:write', text),
+    watchFolders: (paths) => ipcRenderer.send('watch:set', paths),
+    onFsChanged: (callback) => subscribe('fs:changed', callback),
+    logError: (message) => ipcRenderer.send('log:error', message),
     search: (id, root, query) =>
         ipcRenderer.invoke('search:start', id, root, query),
     cancelSearch: (id) => ipcRenderer.send('search:cancel', id),

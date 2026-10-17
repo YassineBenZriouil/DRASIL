@@ -1,13 +1,91 @@
+/* Theme tokens, also read by the canvas (view.ts). Contrast checked against WCAG AA:
+   text at least 4.5:1, shapes at least 3:1 against the background. */
 :root {
     color-scheme: dark;
     --bg: #07090d;
     --panel: #0e1218;
-    --line: #1e2630;
+    --line: #2a3440;
     --text: #d8e2dc;
-    --muted: #7d8a84;
+    --muted: #8f9c96;
     --accent: #7fd1a8;
     --warn: #e6b86a;
-    --bad: #e87f7f;
+    --bad: #f08a8a;
+    --dim: #6b7b74;
+    --edge: rgba(127, 209, 168, 0.28);
+    --cluster: rgba(127, 209, 168, 0.35);
+    --select: #ffffff;
+    --hover: rgba(255, 255, 255, 0.45);
+    --match: #ffe066;
+    --cat-image: #c792ea;
+    --cat-video: #f78c6c;
+    --cat-audio: #ffcb6b;
+    --cat-document: #82aaff;
+    --cat-archive: #d4a373;
+    --cat-code: #89ddff;
+    --cat-app: #ff6b85;
+    --cat-other: #9aa7a1;
+    --stage-glow: #0f1c18;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        color-scheme: light;
+        --bg: #f6f7f5;
+        --panel: #ffffff;
+        --line: #c9d1cd;
+        --text: #1c2421;
+        --muted: #56625c;
+        --accent: #1f7a52;
+        --warn: #8a5a00;
+        --bad: #b42318;
+        --dim: #7d8a84;
+        --edge: rgba(31, 122, 82, 0.4);
+        --cluster: rgba(31, 122, 82, 0.3);
+        --select: #111111;
+        --hover: rgba(0, 0, 0, 0.4);
+        --match: #c79a00;
+        --cat-image: #7b3fb0;
+        --cat-video: #b8461f;
+        --cat-audio: #8a6200;
+        --cat-document: #2c5bc7;
+        --cat-archive: #8a5a2b;
+        --cat-code: #0b6f8a;
+        --cat-app: #c0223f;
+        --cat-other: #5d6964;
+        --stage-glow: #ffffff;
+    }
+}
+
+/* Visually hidden but read by screen readers. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+.skip-link {
+    position: absolute;
+    left: 8px;
+    top: -40px;
+    z-index: 20;
+    padding: 4px 8px;
+    background: var(--panel);
+    color: var(--text);
+    border: 2px solid var(--accent);
+}
+
+.skip-link:focus {
+    top: 8px;
+}
+
+input:focus-visible,
+select:focus-visible,
+[role='treeitem']:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
 }
 
 html,
@@ -110,8 +188,268 @@ main {
 
 .stage {
     position: relative;
+    display: flex;
     flex: 1;
     min-width: 0;
+}
+
+.canvas-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    /* Faint light at the center, so the tree seems to grow out of it. */
+    background: radial-gradient(
+        ellipse at center,
+        var(--stage-glow) 0%,
+        var(--bg) 70%
+    );
+}
+
+h1 {
+    color: var(--accent);
+}
+
+/* Gentle entrances for panels and messages; none when motion is reduced. */
+.panel:not([hidden]),
+.notice,
+#tips:not([hidden]),
+dialog[open] {
+    animation: appear 160ms ease-out;
+}
+
+@keyframes appear {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+}
+
+body[data-motion='reduced'] *,
+body[data-motion='reduced'] *::before,
+body[data-motion='reduced'] *::after {
+    animation: none !important;
+    transition: none !important;
+}
+
+#tips {
+    position: absolute;
+    left: 16px;
+    bottom: 16px;
+    max-width: 360px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 13px;
+    z-index: 4;
+}
+
+#tips .tips-title {
+    margin: 0 0 4px;
+    font-weight: 600;
+}
+
+#tips ul {
+    margin: 0 0 8px;
+    padding-left: 18px;
+}
+
+#tips button {
+    border-color: var(--line);
+}
+
+#welcome {
+    width: min(560px, calc(100vw - 32px));
+}
+
+#welcome h3 {
+    margin: 12px 0 4px;
+    font-size: 14px;
+}
+
+#welcome .group-label {
+    margin: 10px 0 4px;
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+#welcome .choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 6px;
+}
+
+#welcome .choices button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 8px 10px;
+    text-align: left;
+    border-color: var(--line);
+    overflow-wrap: anywhere;
+}
+
+#welcome .choices .where {
+    font-size: 11px;
+    color: var(--muted);
+}
+
+/* Tree only, tree and list, or list only (Settings → Layout). */
+body[data-layout='tree'] #listview {
+    display: none;
+}
+
+body[data-layout='list'] .canvas-wrap {
+    display: none;
+}
+
+#listview {
+    position: relative;
+    flex: none;
+    width: 340px;
+    overflow: auto;
+    border-right: 1px solid var(--line);
+    font-size: 13px;
+}
+
+body[data-layout='list'] #listview {
+    flex: 1;
+    width: auto;
+    border-right: none;
+}
+
+#listview .spacer {
+    width: 1px;
+}
+
+#listview .row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    box-sizing: border-box;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 8px;
+    white-space: nowrap;
+    cursor: default;
+}
+
+#listview .row:hover {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+#listview .row[aria-selected='true'] {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+#listview .row:focus-visible {
+    outline-offset: -2px;
+}
+
+#listview .twisty {
+    flex: none;
+    width: 14px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+#listview .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#listview .meta {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+#settings {
+    width: min(640px, calc(100vw - 32px));
+    max-height: calc(100vh - 64px);
+    display: flex;
+    flex-direction: column;
+}
+
+#settings:not([open]) {
+    display: none;
+}
+
+.settings-body {
+    overflow: auto;
+}
+
+#settings h3 {
+    margin: 16px 0 6px;
+    font-size: 14px;
+}
+
+#settings section label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin: 6px 0;
+}
+
+#settings section label.check {
+    justify-content: flex-start;
+}
+
+#settings select,
+#settings input[type='text'] {
+    font: inherit;
+    color: inherit;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 3px 6px;
+}
+
+#settings .inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+#settings .inline input {
+    flex: 1;
+    min-width: 200px;
+}
+
+#settings .excludes {
+    margin: 6px 0;
+    padding-left: 18px;
+    overflow-wrap: anywhere;
+}
+
+#settings table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+#settings th,
+#settings td {
+    padding: 3px 4px;
+    text-align: left;
+    border-bottom: 1px solid var(--line);
+}
+
+#settings th {
+    font-weight: normal;
+}
+
+#settings button {
+    border-color: var(--line);
 }
 
 #inspector {
@@ -444,7 +782,7 @@ dialog .buttons .danger {
 
 mark {
     color: inherit;
-    background: rgba(255, 224, 102, 0.35);
+    background: color-mix(in srgb, var(--match) 35%, transparent);
 }
 
 #filter-status {

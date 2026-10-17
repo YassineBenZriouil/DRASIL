@@ -1,13 +1,18 @@
-import type { FsNode, NodeState } from '../shared/fs-types';
-import { ancestry, parentPath } from '../shared/paths';
+import type { FsNode, Location, NodeState } from '../shared/fs-types';
+import { DEFAULT_SETTINGS, type Settings } from '../shared/settings';
+import { ancestry, isInside, parentPath } from '../shared/paths';
 import { CATEGORY_NAME, extension, fileCategory } from './filetypes';
 import { isDialogOpen } from './dialog';
 import { passes } from './filter';
 import { FilterPanel } from './filterpanel';
+import { Keymap, MOD_DELETE, MOD_TRASH, type Command } from './keys';
+import { ListView } from './listview';
 import { Tree, type TreeNode } from './model';
 import { Ops } from './ops';
 import { Search } from './search';
+import { SettingsUI } from './settingsui';
 import { TreeView } from './view';
+import { chooseLocation, isWelcomeOpen, showTips } from './welcome';
 
 const api = window.drasil;
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T =>
@@ -69,6 +74,10 @@ function describeSize(t: TreeNode): string {
     const total = `${formatSize(size.bytes)}, ${size.items.toLocaleString()} items inside`;
     if (size.state === 'complete') return total;
     if (size.state === 'estimate') return `at least ${total} (calculating…)`;
+    if (size.state === 'cached')
+        return `about ${total} — calculated ${new Date(size.savedAt ?? 0).toLocaleString()}, may be out of date (recalculating…)`;
+    if (size.excluded)
+        return `at least ${total} (some folders are excluded in Settings or couldn’t be read)`;
     return `at least ${total} (some folders could not be read)`;
 }
 
@@ -171,7 +180,13 @@ function openLocation(path: string): void {
     hint.hidden = true;
     view.select(tree.setRoot(path));
     view.fit();
-    canvas.focus();
+    focusMain();
+}
+
+// Keyboard focus goes to whichever view is showing.
+function focusMain(): void {
+    if (settings.layout === 'list') list.focus();
+    else canvas.focus();
 }
 
 // Make a folder already in the tree the new root.
@@ -414,7 +429,20 @@ function renderNav(): void {
     upButton.disabled = !tree.root || parentPath(tree.root.node.path) === null;
 }
 
+// Screen readers hear selection changes made on the canvas (the list announces its own focus).
+let announced: TreeNode | null = null;
+function announce(): void {
+    const t = view.selected;
+    if (t === announced) return;
+    announced = t;
+    if (!t || list.hasFocus) return;
+    announcer.textContent = `${t.node.name}, ${typeLabel(t.node)}, ${describeState(t) || 'selected'}`;
+}
+
 function render(): void {
+    announce();
+    list.redraw();
+    list.follow(view.selected);
     renderStatus();
     renderActivity();
     renderCrumbs();
@@ -434,6 +462,15 @@ const tree = new Tree((kind) => {
         lastRoot = tree.root;
         search.reset();
         search.updatePlaceholder();
+        const path = tree.root?.node.path ?? null;
+        for (const b of nav.querySelectorAll<HTMLElement>('button'))
+            b.setAttribute('aria-pressed', String(b.dataset.path === path));
+        if (path && settings.lastLocation !== path)
+            void saveSettings({ lastLocation: path });
+    }
+    if (kind === 'tree') {
+        checkRestoredStart();
+        scheduleWatch();
     }
     filters.update(kind);
     render();
@@ -489,15 +526,298 @@ const filters = new FilterPanel(
 );
 const search = new Search(tree, (path) => tree.reveal(path), updateMarks);
 const filtersButton = $('toggle-filters');
-filtersButton.addEventListener('click', () =>
-    filtersButton.setAttribute('aria-pressed', String(filters.toggle()))
-);
+filtersButton.addEventListener('click', toggleFilters);
 
-function toggleInspector(): void {
-    inspector.hidden = !inspector.hidden;
-    inspectorButton.setAttribute('aria-pressed', String(!inspector.hidden));
+// ---- Settings
+
+let settings: Settings = DEFAULT_SETTINGS;
+let settingsLoaded = false;
+const systemReducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+function applySettings(next: Settings): void {
+    const hiddenChanged =
+        !settingsLoaded || settings.showHidden !== next.showHidden;
+    settings = next;
+    settingsLoaded = true;
+    view.reducedMotion =
+        next.motion === 'reduced' ||
+        (next.motion === 'system' && systemReducedMotion.matches);
+    document.body.dataset.layout = next.layout;
+    document.body.dataset.motion = view.reducedMotion ? 'reduced' : 'full';
+    listButton.setAttribute('aria-pressed', String(next.layout !== 'tree'));
+    inspector.hidden = !next.inspector;
+    inspectorButton.setAttribute('aria-pressed', String(next.inspector));
+    if (hiddenChanged) filters.setHiddenDefault(next.showHidden);
+    list.refresh();
+    view.redraw();
     renderInspector();
 }
+systemReducedMotion.addEventListener('change', () => applySettings(settings));
+
+async function saveSettings(patch: Partial<Settings>): Promise<void> {
+    applySettings(await api.setSettings(patch));
+}
+
+function toggleInspector(): void {
+    void saveSettings({ inspector: !settings.inspector });
+}
+
+function toggleList(): void {
+    const layout = settings.layout === 'tree' ? 'both' : 'tree';
+    void saveSettings({ layout }).then(() =>
+        (layout === 'tree' ? canvas : list).focus()
+    );
+}
+
+function toggleFilters(): void {
+    filtersButton.setAttribute('aria-pressed', String(filters.toggle()));
+}
+
+// ---- Views
+
+const announcer = $('announce');
+const listButton = $('toggle-list');
+const list = new ListView($('listview'), tree, view, {
+    open: openItem,
+    label: (t) =>
+        [t.node.name, typeLabel(t.node), describeState(t)]
+            .filter(Boolean)
+            .join(', '),
+    meta: (t) => {
+        if (t.node.kind === 'directory') return describeState(t);
+        const parts = [
+            t.node.size !== undefined ? formatSize(t.node.size) : '',
+            STATE_LABEL[t.node.state],
+        ];
+        return parts.filter(Boolean).join(' · ');
+    },
+    selected: (t) => {
+        view.select(t);
+        if (settings.layout === 'both') view.centerOn(t);
+    },
+});
+view.onLayout = () => list.refresh();
+
+// ---- Commands and shortcuts
+
+function selectedItems(): TreeNode[] {
+    return [...view.selection];
+}
+
+function openMenu(): void {
+    const row = list.hasFocus ? list.focusedRect() : null;
+    const t = view.selected;
+    const [x, y] = row
+        ? [row.left + 24, row.bottom]
+        : t
+          ? view.screenPos(t)
+          : [innerWidth / 2, innerHeight / 2];
+    void ops.menu(x, y);
+}
+
+const commands: Command[] = [
+    { id: 'back', label: 'Back', keys: ['Alt+ArrowLeft'], run: goBack },
+    {
+        id: 'forward',
+        label: 'Forward',
+        keys: ['Alt+ArrowRight'],
+        run: goForward,
+    },
+    {
+        id: 'up',
+        label: 'Parent folder',
+        keys: ['Alt+ArrowUp', 'Backspace'],
+        run: goUp,
+    },
+    {
+        id: 'overview',
+        label: 'See the whole tree',
+        keys: ['Home'],
+        run: () => view.fit(),
+    },
+    {
+        id: 'locate',
+        label: 'Center on the selection',
+        keys: ['C'],
+        run: () => {
+            if (view.selected) view.centerOn(view.selected);
+        },
+    },
+    {
+        id: 'zoomIn',
+        label: 'Zoom in',
+        keys: ['+', '='],
+        run: () => view.zoomBy(1.25),
+    },
+    {
+        id: 'zoomOut',
+        label: 'Zoom out',
+        keys: ['-'],
+        run: () => view.zoomBy(0.8),
+    },
+    {
+        id: 'tree',
+        label: 'Go to the tree',
+        keys: ['Mod+1'],
+        run: () => canvas.focus(),
+    },
+    {
+        id: 'listFocus',
+        label: 'Go to the list view',
+        keys: ['Mod+2'],
+        run: () => {
+            if (settings.layout === 'tree') toggleList();
+            else list.focus();
+        },
+    },
+    {
+        id: 'list',
+        label: 'Show or hide the list view',
+        keys: ['L'],
+        run: toggleList,
+    },
+    {
+        id: 'details',
+        label: 'Show or hide details',
+        keys: ['I'],
+        run: toggleInspector,
+    },
+    {
+        id: 'search',
+        label: 'Search',
+        keys: ['Mod+F'],
+        run: () => search.focus(),
+    },
+    {
+        id: 'filters',
+        label: 'Filters and sorting',
+        keys: ['Mod+Shift+F'],
+        run: toggleFilters,
+    },
+    {
+        id: 'menu',
+        label: 'Actions menu',
+        keys: ['Shift+F10', 'ContextMenu'],
+        run: openMenu,
+    },
+    {
+        id: 'newFolder',
+        label: 'New folder',
+        keys: ['Mod+Shift+N'],
+        run: () => {
+            const f = folderTarget();
+            if (f) void ops.newFolder(f);
+        },
+    },
+    {
+        id: 'copy',
+        label: 'Copy',
+        keys: ['Mod+C'],
+        // Leave normal text copying alone when text is selected on the page.
+        run: () => {
+            if (!view.selection.size || window.getSelection()?.toString())
+                return false;
+            ops.copy(selectedItems());
+        },
+    },
+    {
+        id: 'cut',
+        label: 'Cut',
+        keys: ['Mod+X'],
+        run: () => {
+            if (!view.selection.size) return false;
+            ops.cut(selectedItems());
+        },
+    },
+    {
+        id: 'paste',
+        label: 'Paste',
+        keys: ['Mod+V'],
+        run: () => {
+            const f = folderTarget();
+            if (!ops.hasClipboard || !f) return false;
+            void ops.paste(f);
+        },
+    },
+    {
+        id: 'rename',
+        label: 'Rename',
+        keys: ['F2'],
+        run: () => {
+            if (view.selected) void ops.rename(view.selected);
+        },
+    },
+    {
+        id: 'trash',
+        label: 'Move to Trash',
+        keys: [MOD_TRASH],
+        run: () => void ops.trash(selectedItems()),
+    },
+    {
+        id: 'delete',
+        label: 'Delete permanently',
+        keys: [MOD_DELETE],
+        run: () => void ops.deletePermanently(selectedItems()),
+    },
+    {
+        id: 'copyPath',
+        label: 'Copy path',
+        keys: ['Mod+Shift+C'],
+        run: () => {
+            if (view.selection.size) ops.copyPath(selectedItems());
+        },
+    },
+    {
+        id: 'refresh',
+        label: 'Refresh',
+        keys: ['F5'],
+        run: () => {
+            const f = folderTarget();
+            if (f) ops.refresh(f);
+        },
+    },
+    {
+        id: 'stats',
+        label: 'Performance stats',
+        keys: ['F9'],
+        run: () => view.toggleStats(),
+    },
+    {
+        id: 'shortcuts',
+        label: 'Keyboard shortcuts',
+        keys: ['F1', '?'],
+        run: () => void settingsUI.open('shortcuts'),
+    },
+    {
+        id: 'settings',
+        label: 'Settings',
+        keys: ['Mod+,'],
+        run: () => void settingsUI.open(),
+    },
+];
+
+let keymap = new Keymap(commands, {});
+let locations: Location[] = [];
+const settingsUI = new SettingsUI({
+    get: () => settings,
+    save: saveSettings,
+    get keymap() {
+        return keymap;
+    },
+    locations: () => locations,
+    currentFolder: () => tree.root?.node.path ?? null,
+    sizesChanged: () => tree.restartSizes(),
+});
+
+window.addEventListener('keydown', (e) => {
+    if (isDialogOpen() || settingsUI.isOpen || isWelcomeOpen()) return;
+    keymap.handle(e);
+});
+// Mouse back/forward buttons.
+window.addEventListener('mouseup', (e) => {
+    if (e.button === 3) goBack();
+    else if (e.button === 4) goForward();
+});
 
 backButton.addEventListener('click', goBack);
 forwardButton.addEventListener('click', goForward);
@@ -507,66 +827,164 @@ $('locate').addEventListener('click', () => {
     if (view.selected) view.centerOn(view.selected);
 });
 inspectorButton.addEventListener('click', toggleInspector);
+listButton.addEventListener('click', toggleList);
+$('open-settings').addEventListener('click', () => void settingsUI.open());
+$('skip').addEventListener('click', focusMain);
 
-const isMac = api.platform === 'darwin';
-window.addEventListener('keydown', (e) => {
-    if (isDialogOpen() || e.target instanceof HTMLInputElement) return;
-    const mod = e.ctrlKey || e.metaKey;
-    const key = e.key.toLowerCase();
-    const items = [...view.selection];
-    const folder = folderTarget();
-    // Leave normal text copying alone when the user has selected text on the page.
-    const textSelected = (window.getSelection()?.toString() ?? '') !== '';
+// ---- Changes made by other apps
+
+// Tell the main process which folders are open, so it can notice outside changes to them.
+let watchTimer = 0;
+let lastWatched = '';
+function scheduleWatch(): void {
+    clearTimeout(watchTimer);
+    watchTimer = window.setTimeout(() => {
+        const root = tree.root;
+        const open: string[] = [];
+        // Shallow folders first, so the limit in the main process keeps the most visible ones.
+        const queue = root ? [root] : [];
+        for (let i = 0; i < queue.length; i++) {
+            const t = queue[i]!;
+            if (t.node.kind !== 'directory' || !t.expanded) continue;
+            open.push(t.node.path);
+            for (const c of t.children) if (c.expanded) queue.push(c);
+        }
+        const key = open.join('\n');
+        if (key === lastWatched) return;
+        lastWatched = key;
+        api.watchFolders(open);
+    }, 500);
+}
+
+// Sizes are recalculated after outside changes, but not more than every few seconds.
+let sizeTimer = 0;
+api.onFsChanged((paths) => {
+    tree.refresh(paths);
+    clearTimeout(sizeTimer);
+    sizeTimer = window.setTimeout(() => tree.restartSizes(), 5000);
+});
+
+// ---- Drives coming and going
+
+const POLL_DRIVES_MS = 5000;
+function renderLocations(): void {
+    const path = tree.root?.node.path ?? null;
+    nav.replaceChildren(
+        ...locations.map((loc) => {
+            const b = button(loc.name, () => openLocation(loc.path));
+            b.title = loc.path;
+            b.dataset.path = loc.path;
+            b.setAttribute('aria-pressed', String(loc.path === path));
+            return b;
+        })
+    );
+}
+
+// A slow drive check (e.g. a network drive timing out) must not pile up behind itself.
+let polling = false;
+async function pollDrives(): Promise<void> {
+    if (polling) return;
+    polling = true;
+    const next = await api.locations().catch(() => locations);
+    polling = false;
+    const drives = (ls: Location[]): Map<string, Location> =>
+        new Map(ls.filter((l) => l.kind === 'drive').map((l) => [l.path, l]));
+    const before = drives(locations);
+    const after = drives(next);
+    const root = tree.root;
+    for (const [path, loc] of before)
+        if (!after.has(path)) {
+            ops.notify(
+                `“${loc.name}” was disconnected. Anything open from it is shown as unavailable.`,
+                [],
+                true
+            );
+            if (root && isInside(root.node.path, path))
+                tree.refresh([root.node.path]);
+        }
+    for (const [path, loc] of after)
+        if (!before.has(path)) {
+            ops.notify(`“${loc.name}” is connected.`);
+            // The drive the tree was showing came back: read it again.
+            if (root && isInside(root.node.path, path))
+                tree.refresh([root.node.path]);
+        }
+    const changed =
+        next.map((l) => l.path).join('|') !==
+        locations.map((l) => l.path).join('|');
+    locations = next;
+    if (changed) renderLocations();
+}
+
+// ---- Errors
+
+// Anything unexpected is logged locally and mentioned once, instead of failing silently.
+let lastErrorNotice = 0;
+function reportError(message: string): void {
+    api.logError(message);
+    if (Date.now() - lastErrorNotice < 10_000) return;
+    lastErrorNotice = Date.now();
+    ops.notify(
+        'Something went wrong. Your files were not changed by it, and the details were saved to the log. If the view looks wrong, press F5.',
+        [],
+        true
+    );
+}
+window.addEventListener('error', (e) =>
+    reportError(`${e.message} at ${e.filename}:${e.lineno}`)
+);
+window.addEventListener('unhandledrejection', (e) =>
+    reportError(`Unhandled: ${String(e.reason)}`)
+);
+
+// ---- Start
+
+// If the remembered location turns out to be gone, offer the picker instead of an empty tree.
+let restoring: string | null = null;
+function checkRestoredStart(): void {
+    const root = tree.root;
+    if (!restoring || !root || root.node.path !== restoring) return;
+    const state = root.node.state;
+    if (state === 'loading' || state === 'unscanned') return;
+    const path = restoring;
+    restoring = null;
     if (
-        (e.key === 'Delete' && e.shiftKey) ||
-        (isMac && e.metaKey && e.altKey && e.key === 'Backspace')
+        state === 'unavailable' ||
+        state === 'inaccessible' ||
+        state === 'error'
     )
-        void ops.deletePermanently(items);
-    else if (
-        (e.key === 'Delete' && !mod) ||
-        (isMac && e.metaKey && e.key === 'Backspace')
-    )
-        void ops.trash(items);
-    else if (mod && key === 'f') search.focus();
-    else if (e.altKey && e.key === 'ArrowLeft') goBack();
-    else if (e.altKey && e.key === 'ArrowRight') goForward();
-    else if (
-        (e.altKey && e.key === 'ArrowUp') ||
-        (e.key === 'Backspace' && !mod)
-    )
-        goUp();
-    else if (mod && e.shiftKey && key === 'n') {
-        if (folder) void ops.newFolder(folder);
-    } else if (mod && key === 'c' && items.length && !textSelected)
-        ops.copy(items);
-    else if (mod && key === 'x' && items.length) ops.cut(items);
-    else if (mod && key === 'v' && ops.hasClipboard) {
-        if (folder) void ops.paste(folder);
-    } else if (e.key === 'F2' && view.selected) void ops.rename(view.selected);
-    else if (e.key === 'F5') {
-        if (folder) ops.refresh(folder);
-    } else if (e.altKey || mod) return;
-    else if (e.key === 'i' || e.key === 'I') toggleInspector();
-    else if ((e.key === 'c' || e.key === 'C') && view.selected)
-        view.centerOn(view.selected);
-    else return;
-    e.preventDefault();
-});
-// Mouse back/forward buttons.
-window.addEventListener('mouseup', (e) => {
-    if (e.button === 3) goBack();
-    else if (e.button === 4) goForward();
-});
+        void pickLocation(
+            `Your last location, ${path}, isn’t available right now.`
+        );
+}
 
-api.locations().then((locations) => {
-    for (const loc of locations) {
-        const b = button(loc.name, () => {
-            for (const other of nav.querySelectorAll('button'))
-                other.setAttribute('aria-pressed', String(other === b));
-            openLocation(loc.path);
-        });
-        b.title = loc.path;
-        b.setAttribute('aria-pressed', 'false');
-        nav.append(b);
+async function pickLocation(message?: string): Promise<void> {
+    const first = !settings.onboarded;
+    const path = await chooseLocation(locations, { first, message });
+    if (first) await saveSettings({ onboarded: true });
+    if (path) openLocation(path);
+    if (path && !settings.tipsDismissed)
+        showTips(() => void saveSettings({ tipsDismissed: true }));
+}
+
+void (async () => {
+    applySettings(await api.getSettings());
+    keymap = new Keymap(commands, settings.keys);
+    locations = await api.locations();
+    renderLocations();
+    setInterval(() => void pollDrives(), POLL_DRIVES_MS);
+    const start =
+        settings.startLocation === 'ask'
+            ? null
+            : settings.startLocation === 'last'
+              ? settings.lastLocation
+              : settings.startLocation;
+    if (!settings.onboarded || !start) {
+        await pickLocation();
+        return;
     }
-});
+    restoring = start;
+    openLocation(start);
+    if (!settings.tipsDismissed)
+        showTips(() => void saveSettings({ tipsDismissed: true }));
+})();

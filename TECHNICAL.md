@@ -85,10 +85,35 @@ Flow: renderer `drasil.list(path, id)` → IPC `fs:list` (main checks the path i
 - **Highlight** the 10 largest folders, largest files or oldest files among the items on screen. Drawn as an amber halo (search matches are yellow), always labelled, and listed in the panel. Folder totals that aren't complete say "at least".
 - Ctrl/Cmd+F focuses search. ↓/↑ move through results, Enter goes to one, Esc clears.
 
+## Accessibility, keyboard and settings (Phase 8)
+
+- **Settings** (`shared/settings.ts` holds the shape, defaults and `sanitizeSettings`; `main/settings.ts` stores them in `userData/settings.json`, writing a temp file first). IPC `settings:get` / `settings:set` (a partial patch, merged and fully re-validated). The main process applies `theme` through `nativeTheme.themeSource`, so CSS `prefers-color-scheme` and the native menus follow it, and `uiScale` through `setZoomFactor`, reapplied on every page load.
+- **Themes:** all colors are CSS tokens in `style.css` (dark by default, light under `prefers-color-scheme: light`). The canvas reads the same tokens (`loadPalette` in `view.ts`) and reloads them when the scheme changes. Checked against WCAG AA: text at least 4.5:1, shapes at least 3:1 on the background, in both themes. Re-check if you change a token.
+- **Motion:** `view.reducedMotion` (Settings → Animation, or the OS setting) turns off node glides, camera glides, the spinning loading arc and the busy pulse. State is still shown by shape and text.
+- **Sharpness:** the canvas re-sizes on pixel-ratio changes (moving to another screen, or changing the interface size).
+- **Shortcuts** (`renderer/keys.ts`): one `Keymap` of commands, defined in `main.ts`. Defaults can be overridden in Settings (saved as `keys`), and assigning a combo takes it away from any other command. This is the single source of keyboard shortcuts; add new ones there, not in ad-hoc `keydown` handlers. Plain keys (letters, Home, Backspace…) are ignored in text fields and inside `[data-own-keys]` (the list view). The canvas itself only handles Escape, Enter/Space and arrows (up = parent, down = into a folder, left/right = siblings).
+- **List view** (`renderer/listview.ts`): an ARIA `tree` built from the same `Tree` and `shown` lists as the canvas. It uses a roving tabindex and `aria-level` / `setsize` / `posinset` / `expanded` / `selected` / `busy`, and is virtualized (26 px rows, plus the focused row is always kept). Row elements are reused, so focus is never lost on updates. Arrows, Home/End, PgUp/PgDn, Enter, Space, Ctrl/Cmd+Space and type-ahead all work. Layout: tree / tree and list / list only (`body[data-layout]`).
+- **Screen readers:** selection changes made outside the list are announced through `#announce` (polite). The footer status is no longer a live region, because sizes update it several times a second. The search status sets `aria-busy` until the search ends. There is a "Skip to files" button at the top.
+- **Cache:** the size worker saves the totals from each finished root walk to `userData/cache/sizes-<sha1(root)>.json` (folders cached during the walk, up to 50,000). When a root is opened again, saved totals are sent as `state: 'cached'` with `savedAt` until fresh ones arrive. The UI says "about … calculated <date>, may be out of date (recalculating…)". Settings shows the cache size and can clear it (`cache:info` / `cache:clear`); clearing never touches user files.
+- **Excluded locations** (Settings): size calculation and search don't enter them. Totals that skipped one are `incomplete` with `excluded: true` and say so; search coverage counts them.
+- **Start location:** ask, last location (saved whenever the root changes), or a fixed path.
+
+## Polish, onboarding and hardening (Phase 9)
+
+- **First launch** (`renderer/welcome.ts`): a short welcome with a location picker (places and drives), then a dismissible tips card. There is no tutorial. Settings `onboarded` / `tipsDismissed` remember both. Later launches reopen the last location (`startLocation` now defaults to `'last'`). If it's gone or unreadable, the picker opens and says why.
+- **Outside changes** (`main/watch.ts`): the renderer sends the open folders (`watch:set`, shallow first, capped at 2,000). The main process polls their modification times every 3 s and sends `fs:changed`; the renderer then runs `Tree.refresh`, plus a size recalculation at most every 5 s. Polling is used on purpose instead of `fs.watch`: on Windows a watch holds a directory handle that can stop other programs deleting folders. Polling also works on network drives and notices vanished drives. Known gap (marked `shortcut:`): FAT/exFAT may not update folder times.
+- **Drives:** the renderer re-reads the locations every 5 s and says when a drive is disconnected or connected. If the tree's drive comes back, the tree is read again.
+- **Crash safety** (`main/index.ts`): a crashed window reloads, and a frozen one offers Wait / Reload. Both re-read the disk; nothing is assumed. A size worker that dies asks the window to restart the calculation (at most 3 times a minute). A search worker that dies ends the search as "stopped before it finished". Uncaught errors in main or the window go to a local log, `userData/logs/drasil.log` (1 MB, one old copy kept), and the window shows one notice.
+- **Look:** a faint radial glow behind the tree; bolder main branches that fade outward; a soft glow on the root and the selection only, so the cost doesn't grow with tree size; 160 ms panel entrances. All motion is off when `body[data-motion=reduced]`.
+
 ## Privacy guards (in place now)
 
 - Strict Content-Security-Policy in `src/renderer/index.html`. Only the local dev server is allowed as a connection.
 - The window refuses to navigate and refuses to open new windows.
+- Every web request outside `file:`/`data:`/`blob:`/`devtools:` (and the dev server while developing) is cancelled in `main/index.ts` and logged as a bug, so a stray dependency can't phone home.
+- The spellchecker is off: it would download dictionaries.
+- No telemetry, crash uploads or update checks. Logs, settings and the size cache stay in `userData`. Nothing needs admin/root.
+- Checked in Phase 9: a normal run logged no blocked requests.
 
 ## Commands
 

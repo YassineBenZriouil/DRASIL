@@ -30,7 +30,9 @@ let active = 0;
 const fold = (s: string): string => s.normalize('NFC').toLocaleLowerCase();
 
 const foldPath =
-    process.platform === 'linux' ? (s: string) => s : (s: string) => s.toLowerCase();
+    process.platform === 'linux'
+        ? (s: string) => s
+        : (s: string) => s.toLowerCase();
 
 async function search(
     id: number,

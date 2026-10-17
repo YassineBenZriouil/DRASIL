@@ -6,6 +6,7 @@ import type { SearchRequest } from './search-worker';
 import createWorker from './search-worker?nodeWorker';
 
 let worker: Worker | null = null;
+let currentId = 0;
 // One window explores at a time; the one that started the latest search gets the results.
 let owner: WebContents | null = null;
 
@@ -13,12 +14,27 @@ function post(msg: SearchRequest): void {
     if (!worker) {
         const w = createWorker({});
         w.on('message', (event: SearchEvent) => {
+            if (event.type === 'done' && event.id === currentId) currentId = 0;
             if (owner && !owner.isDestroyed())
                 owner.send('search:event', event);
         });
         w.on('error', (err) => console.error('Search worker failed:', err));
         w.on('exit', () => {
             worker = null;
+            // End the running search honestly instead of leaving it "searching" forever.
+            if (currentId && owner && !owner.isDestroyed())
+                owner.send('search:event', {
+                    id: currentId,
+                    type: 'done',
+                    coverage: {
+                        folders: 0,
+                        unreadable: 0,
+                        unreadableSamples: [],
+                        excluded: 0,
+                        limited: false,
+                        cancelled: true,
+                    },
+                } satisfies SearchEvent);
         });
         worker = w;
     }
@@ -32,6 +48,7 @@ export function startSearch(
     query: string
 ): void {
     owner = sender;
+    currentId = id;
     post({
         type: 'search',
         id,

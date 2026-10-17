@@ -64,7 +64,9 @@ export interface SizeInfo {
 
 export type SizeEvent =
     | { type: 'sizes'; sizes: SizeInfo[] }
-    | { type: 'progress'; scanned: number; done: boolean };
+    | { type: 'progress'; scanned: number; done: boolean }
+    // The size worker stopped unexpectedly; the window should start the calculation again.
+    | { type: 'restart' };
 
 export type TransferMode = 'move' | 'copy';
 
@@ -183,6 +185,10 @@ export interface DrasilApi {
     cancelOp(id: number): void;
     onOpEvent(callback: (event: OpEvent) => void): () => void;
     copyText(text: string): void;
+    // Folders open in the tree; changes to them by other apps arrive through onFsChanged.
+    watchFolders(paths: string[]): void;
+    onFsChanged(callback: (paths: string[]) => void): () => void;
+    logError(message: string): void;
     // Searches names under `root` (partial, case-insensitive). Starting a new search cancels the last one.
     search(id: number, root: string, query: string): Promise<void>;
     cancelSearch(id: number): void;
