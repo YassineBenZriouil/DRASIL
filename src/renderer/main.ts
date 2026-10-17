@@ -7,6 +7,7 @@ const canvas = document.getElementById('world') as HTMLCanvasElement;
 const nav = document.getElementById('locations')!;
 const hint = document.getElementById('hint')!;
 const status = document.getElementById('status')!;
+const progress = document.getElementById('size-progress')!;
 
 const STATE_LABEL: Record<NodeState, string> = {
     unscanned: 'not scanned',
@@ -30,15 +31,33 @@ function formatSize(bytes: number): string {
     return `${i === 0 ? n : n.toFixed(1)} ${units[i]}`;
 }
 
+// Folder totals are only called exact when the whole folder was read.
+function describeSize(t: TreeNode): string {
+    const size = tree.sizes.get(t.node.path);
+    if (!size)
+        return tree.sizeProgress.done ? 'size unknown' : 'size: calculating…';
+    const total = `${formatSize(size.bytes)}, ${size.items.toLocaleString()} items inside`;
+    if (size.state === 'complete') return total;
+    if (size.state === 'estimate') return `at least ${total} (calculating…)`;
+    return `at least ${total} (some folders could not be read)`;
+}
+
 // A text description of the selection, so nothing depends on reading shapes or colors.
 function describe(t: TreeNode): string {
     const { node } = t;
     const parts: string[] = [];
     if (node.kind === 'directory') {
-        if (node.state === 'scanned') parts.push(`${t.count} items`);
+        if (node.state === 'scanned')
+            parts.push(`${t.count.toLocaleString()} items`);
         else if (node.state === 'loading')
-            parts.push(`loading, ${t.count} items so far`);
+            parts.push(`loading, ${t.count.toLocaleString()} items so far`);
         else parts.push(STATE_LABEL[node.state]);
+        if (
+            node.state !== 'inaccessible' &&
+            node.state !== 'unavailable' &&
+            !node.link
+        )
+            parts.push(describeSize(t));
     } else {
         if (node.size !== undefined) parts.push(formatSize(node.size));
         if (node.state !== 'scanned') parts.push(STATE_LABEL[node.state]);
@@ -50,6 +69,15 @@ function describe(t: TreeNode): string {
     if (node.hidden) parts.push('hidden');
     if (node.error) parts.push(node.error);
     return parts.join(' · ');
+}
+
+function renderProgress(): void {
+    const { scanned, done } = tree.sizeProgress;
+    progress.textContent = !tree.root
+        ? ''
+        : done
+          ? 'Folder sizes ready'
+          : `Calculating folder sizes… ${scanned.toLocaleString()} items checked`;
 }
 
 function renderStatus(t: TreeNode | null): void {
@@ -65,8 +93,9 @@ function renderStatus(t: TreeNode | null): void {
     status.replaceChildren(name, ` — ${describe(t)} — `, path);
 }
 
-const tree = new Tree(() => {
-    view.relayout();
+const tree = new Tree((kind) => {
+    if (kind === 'tree') view.relayout();
+    else renderProgress();
     renderStatus(view.selected);
 });
 const view = new TreeView(canvas, tree, renderStatus);

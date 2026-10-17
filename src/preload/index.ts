@@ -1,16 +1,22 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { DrasilApi, ListEvent } from '../shared/fs-types';
+import type { DrasilApi } from '../shared/fs-types';
+
+function subscribe<T>(channel: string, callback: (event: T) => void) {
+    const handler = (_: IpcRendererEvent, event: T): void => callback(event);
+    ipcRenderer.on(channel, handler);
+    return () => {
+        ipcRenderer.removeListener(channel, handler);
+    };
+}
 
 const api: DrasilApi = {
     locations: () => ipcRenderer.invoke('fs:locations'),
     list: (path, id) => ipcRenderer.invoke('fs:list', path, id),
     cancel: (id) => ipcRenderer.send('fs:cancel', id),
-    onListEvent: (callback) => {
-        const handler = (_: IpcRendererEvent, event: ListEvent): void =>
-            callback(event);
-        ipcRenderer.on('fs:list-event', handler);
-        return () => ipcRenderer.removeListener('fs:list-event', handler);
-    },
+    onListEvent: (callback) => subscribe('fs:list-event', callback),
+    startSizes: (root) => ipcRenderer.invoke('size:start', root),
+    watchSizes: (paths) => ipcRenderer.send('size:watch', paths),
+    onSizeEvent: (callback) => subscribe('size:event', callback),
 };
 
 contextBridge.exposeInMainWorld('drasil', api);

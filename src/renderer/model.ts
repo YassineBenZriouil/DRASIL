@@ -1,16 +1,25 @@
-import type { FsNode, ListEvent } from '../shared/fs-types';
+import type { FsNode, ListEvent, SizeInfo } from '../shared/fs-types';
 
 export interface TreeNode {
     node: FsNode;
     parent: TreeNode | null;
+    // Sorted children that are part of the layout.
     children: TreeNode[];
+    // Received but not yet merged in. Merging happens once per layout pass, not per batch,
+    // so a folder with a million entries isn't re-sorted thousands of times.
+    pending: TreeNode[];
     depth: number;
     expanded: boolean;
     // Children received so far (or the final count once done).
     count: number;
-    // Layout: polar position, current drawn position (x, y) and animation target (tx, ty).
+    // Layout (see layout.ts): wedge [a0, a1], polar position, ring radius for children,
+    // farthest descendant radius, current drawn position (x, y) and animation target (tx, ty).
+    a0: number;
+    a1: number;
     angle: number;
     radius: number;
+    childRadius: number;
+    maxRadius: number;
     x: number;
     y: number;
     tx: number;
@@ -29,18 +38,37 @@ function byKindThenName(a: TreeNode, b: TreeNode): number {
     return dirA - dirB || collator.compare(a.node.name, b.node.name);
 }
 
+function merge(a: TreeNode[], b: TreeNode[]): TreeNode[] {
+    const out = new Array<TreeNode>(a.length + b.length);
+    let i = 0;
+    let j = 0;
+    let k = 0;
+    while (i < a.length && j < b.length)
+        out[k++] = byKindThenName(a[i]!, b[j]!) <= 0 ? a[i++]! : b[j++]!;
+    while (i < a.length) out[k++] = a[i++]!;
+    while (j < b.length) out[k++] = b[j++]!;
+    return out;
+}
+
 function makeNode(node: FsNode, parent: TreeNode | null): TreeNode {
     const x = parent?.x ?? 0;
     const y = parent?.y ?? 0;
+    const angle = parent?.angle ?? 0;
+    const radius = parent?.radius ?? 0;
     return {
         node,
         parent,
         children: [],
+        pending: [],
         depth: parent ? parent.depth + 1 : 0,
         expanded: false,
         count: 0,
-        angle: parent?.angle ?? 0,
-        radius: parent?.radius ?? 0,
+        a0: angle,
+        a1: angle,
+        angle,
+        radius,
+        childRadius: radius,
+        maxRadius: radius,
         x,
         y,
         tx: x,
@@ -48,23 +76,47 @@ function makeNode(node: FsNode, parent: TreeNode | null): TreeNode {
     };
 }
 
+function descendants(t: TreeNode): number {
+    let n = t.pending.length;
+    for (const c of t.children) n += 1 + descendants(c);
+    return n;
+}
+
 export function isKnown(t: TreeNode): boolean {
     return t.node.state === 'scanned' || t.node.state === 'empty';
 }
 
-// The renderer's view of the filesystem: what has been listed, and which folders are open.
+export type ChangeKind = 'tree' | 'sizes';
+
+// The renderer's view of the filesystem: what has been listed, which folders are open,
+// and the folder sizes calculated so far.
 export class Tree {
     root: TreeNode | null = null;
+    // Nodes received under the current root.
+    loaded = 0;
+    sizes = new Map<string, SizeInfo>();
+    sizeProgress = { scanned: 0, done: false };
     private nextId = 1;
     private listings = new Map<number, TreeNode>();
+    private withPending = new Set<TreeNode>();
 
-    constructor(private onChange: () => void) {
+    constructor(private onChange: (kind: ChangeKind) => void) {
         api.onListEvent((event) => this.handle(event));
+        api.onSizeEvent((event) => {
+            if (event.type === 'sizes')
+                for (const s of event.sizes) this.sizes.set(s.path, s);
+            else this.sizeProgress = event;
+            this.onChange('sizes');
+        });
     }
 
     setRoot(path: string, name: string): TreeNode {
         for (const id of this.listings.keys()) api.cancel(id);
         this.listings.clear();
+        this.withPending.clear();
+        this.sizes.clear();
+        this.sizeProgress = { scanned: 0, done: false };
+        this.loaded = 1;
         this.root = makeNode(
             {
                 path,
@@ -75,6 +127,8 @@ export class Tree {
             },
             null
         );
+        void api.startSizes(path);
+        api.watchSizes([path]);
         this.expand(this.root);
         return this.root;
     }
@@ -94,17 +148,28 @@ export class Tree {
         }
         // Anything not fully known is listed again: unscanned, partial, failed, or a drive that came back.
         if (!isKnown(t) && t.node.state !== 'loading') this.list(t);
-        this.onChange();
+        this.onChange('tree');
     }
 
     collapse(t: TreeNode): void {
         if (!t.expanded) return;
         t.expanded = false;
-        this.onChange();
+        this.onChange('tree');
     }
 
-    cancel(t: TreeNode): void {
-        for (const [id, n] of this.listings) if (n === t) api.cancel(id);
+    // Merge received children into their sorted lists. Called right before each layout pass.
+    flush(): void {
+        const dirs: string[] = [];
+        for (const t of this.withPending) {
+            t.pending.sort(byKindThenName);
+            for (const c of t.pending)
+                if (c.node.kind === 'directory') dirs.push(c.node.path);
+            t.children = merge(t.children, t.pending);
+            t.pending = [];
+        }
+        this.withPending.clear();
+        for (let i = 0; i < dirs.length; i += 5000)
+            api.watchSizes(dirs.slice(i, i + 5000));
     }
 
     *visible(): Generator<TreeNode> {
@@ -118,7 +183,9 @@ export class Tree {
 
     private list(t: TreeNode): void {
         const id = this.nextId++;
+        this.loaded -= descendants(t);
         t.children = [];
+        t.pending = [];
         t.count = 0;
         t.node.state = 'loading';
         t.node.error = undefined;
@@ -127,7 +194,7 @@ export class Tree {
             this.listings.delete(id);
             t.node.state = 'error';
             t.node.error = String(err);
-            this.onChange();
+            this.onChange('tree');
         });
     }
 
@@ -135,15 +202,16 @@ export class Tree {
         const t = this.listings.get(event.id);
         if (!t) return;
         if (event.type === 'batch') {
-            for (const n of event.nodes) t.children.push(makeNode(n, t));
-            t.children.sort(byKindThenName);
+            for (const n of event.nodes) t.pending.push(makeNode(n, t));
+            this.withPending.add(t);
             t.count += event.nodes.length;
+            this.loaded += event.nodes.length;
         } else {
             this.listings.delete(event.id);
             t.node.state = event.state;
             t.node.error = event.error;
             t.count = event.count;
         }
-        this.onChange();
+        this.onChange('tree');
     }
 }

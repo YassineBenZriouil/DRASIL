@@ -44,10 +44,31 @@ export interface Location {
     kind: 'drive' | 'place';
 }
 
+// 'estimate' = still being calculated (a lower bound so far).
+// 'incomplete' = finished, but some folders inside could not be read (also a lower bound).
+export type SizeState = 'complete' | 'estimate' | 'incomplete';
+
+export interface SizeInfo {
+    path: string;
+    bytes: number;
+    // Files and folders inside, at any depth.
+    items: number;
+    state: SizeState;
+}
+
+export type SizeEvent =
+    | { type: 'sizes'; sizes: SizeInfo[] }
+    | { type: 'progress'; scanned: number; done: boolean };
+
 export interface DrasilApi {
     locations(): Promise<Location[]>;
     // `id` is picked by the caller so events can't arrive before it's known.
     list(path: string, id: number): Promise<void>;
     cancel(id: number): void;
     onListEvent(callback: (event: ListEvent) => void): () => void;
+    // Starts calculating folder sizes under `root`, replacing any previous calculation.
+    startSizes(root: string): Promise<void>;
+    // Asks for size updates of these folders (they are calculated first).
+    watchSizes(paths: string[]): void;
+    onSizeEvent(callback: (event: SizeEvent) => void): () => void;
 }

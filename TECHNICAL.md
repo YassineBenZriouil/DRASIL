@@ -33,11 +33,20 @@ Flow: renderer `drasil.list(path, id)` → IPC `fs:list` (main checks the path i
 
 ## Radial tree (Phase 3)
 
-- `renderer/model.ts` — `Tree`: the renderer's copy of what has been listed, plus which folders are open. It owns all listing requests and calls `onChange` after every batch or state change. Opening a folder that isn't `scanned`/`empty` lists it again, which also covers retry and reconnected drives.
-- `renderer/layout.ts` — radial layout. Each node gets a slice of its parent's wedge, sized by how many visible leaves it holds. Distance from the center is `depth × RING`. It only sets targets (`tx`, `ty`).
+- `renderer/model.ts` — `Tree`: the renderer's copy of what has been listed, plus which folders are open. It owns all listing requests and calls `onChange` after every batch or state change. Batches go into `pending` and are merged into the sorted `children` by `flush()`, once per layout pass. Opening a folder that isn't `scanned`/`empty` lists it again, which also covers retry and reconnected drives.
+- `renderer/layout.ts` — radial layout. Each node gets a slice of its parent's wedge, weighted by `1 + √(subtree weight)` so one huge folder can't squeeze its siblings. Each folder puts its children on a ring at `childRadius`: at least `RING` further out, and pushed further (up to `MAX_GAP`) until every child gets `SPACING` units of arc. It only sets targets (`tx`, `ty`) plus the wedge, `childRadius` and `maxRadius` used for culling.
 - `renderer/view.ts` — `TreeView`: canvas drawing, pan/zoom, hit-testing, selection. Nodes animate towards their targets. With reduced motion turned on, they jump. Redraws happen only while something moves or loads.
 - Folder states are shown by shape, not just color: dashed ring = not scanned, spinning arc = loading, filled = opened, filled + outer ring = closed with contents, plain ring = empty, half filled = partial, ring with ✕ = no access (dashed = unavailable), triangle = error. The footer also describes the selection in text.
 - The Phase 2 list view was removed. The accessible alternative view gets rebuilt in Phase 8 on top of the same `Tree` model.
+
+## Scale and level of detail (Phase 4)
+
+- **Culling:** `TreeView.collect()` walks only subtrees whose wedge and radius range overlap the screen. A folder's on-screen children are found by binary search over their wedges, so a folder with 1M entries costs only what is visible. Only drawn nodes are animated and hit-tested.
+- **Clusters:** if a folder's children would be less than `CLUSTER_PX` (3 px) apart, they are drawn as one band, labelled "N items · zoom in". Clicking the band zooms in until it opens.
+- **Labels** are always 12 px. A label is hidden (not shrunk) when siblings are less than `LABEL_PX` (14 px) apart, or when it would run into the children's ring. Selected and hovered items always get a label.
+- **Throttled layout:** while folders stream in, the layout runs at most every `max(100 ms, 2 × last layout time)`.
+- **Folder sizes:** `main/fs/size-worker.ts` (its own worker, via `main/fs/sizes.ts`, IPC `size:start` / `size:watch` / `size:event`). Starting a root begins one walk of it. Folders the UI is showing are "watched": they are walked first and get updates every 300 ms. The walk never follows links. It skips virtual filesystems (`/proc`, `/sys`, `/dev`, `/run` on Linux; `/dev`, `/System/Volumes`, `/Volumes` on macOS). Only folders within 2 levels of the root, plus watched folders, are cached, which keeps memory bounded. States: `complete`; `estimate` (still walking, a lower bound); `incomplete` (finished, but something couldn't be read, also a lower bound). The UI says "at least …" for the last two.
+- **Performance budget:** 60 fps (≤ 16 ms per frame) while panning and zooming, with 1M+ items loaded; renderer heap ≤ 1.5 GB at 1M loaded items. F2 on the canvas shows fps, frame time, layout time, drawn and loaded counts, and heap. `npm run make-test-tree -- <empty folder> [files] [perFolder]` creates a test tree (default 1M empty files, 100 per folder; set `perFolder` = `files` for one flat folder).
 
 ## Privacy guards (in place now)
 
@@ -46,14 +55,15 @@ Flow: renderer `drasil.list(path, id)` → IPC `fs:list` (main checks the path i
 
 ## Commands
 
-| Command                                   | What it does                |
-| ----------------------------------------- | --------------------------- |
-| `npm install`                             | Install dependencies        |
-| `npm run dev`                             | Run the app with hot reload |
-| `npm run build`                           | Build into `out/`           |
-| `npm start`                               | Run the built app           |
-| `npm run typecheck` / `npm run lint`      | Type-check / lint           |
-| `npm run format` / `npm run format:check` | Format / check formatting   |
+| Command                                               | What it does                |
+| ----------------------------------------------------- | --------------------------- |
+| `npm install`                                         | Install dependencies        |
+| `npm run dev`                                         | Run the app with hot reload |
+| `npm run build`                                       | Build into `out/`           |
+| `npm start`                                           | Run the built app           |
+| `npm run typecheck` / `npm run lint`                  | Type-check / lint           |
+| `npm run format` / `npm run format:check`             | Format / check formatting   |
+| `npm run make-test-tree -- <dir> [files] [perFolder]` | Create a large test tree    |
 
 ## Known setup issues
 
@@ -62,8 +72,7 @@ Flow: renderer `drasil.list(path, id)` → IPC `fs:list` (main checks the path i
 
 ## Not done yet
 
-- **Phase 2 automated tests** for the node states — testing is handled by the user.
-
+- **Automated tests** for node states and size totals, and a measured performance run — testing is handled by the user.
 - **CI** — needs git and a hosted repo. Skipped under the "no git unless asked" rule.
 - **Test runner** — testing is handled by the user.
 - **Installers** — Phase 10.

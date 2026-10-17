@@ -102,6 +102,7 @@ canvas:focus-visible {
 
 footer {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     gap: 16px;
     padding: 6px 16px;
@@ -111,10 +112,16 @@ footer {
 }
 
 #status {
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+#size-progress {
+    flex: none;
+    color: var(--muted);
 }
 
 #status .path {
