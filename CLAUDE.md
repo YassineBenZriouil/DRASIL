@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-Phases 1–5 are complete: an Electron + TypeScript + electron-vite app with a lazy filesystem engine a background folder-size worker, and a Canvas 2D radial tree with culling and level of detail (`src/renderer/model.ts`, `layout.ts`, `view.ts`), plus history, path bar and inspector (`src/renderer/main.ts`). Stack, engine design and reasons are in `TECHNICAL.md`.
+Phases 1–7 are complete: an Electron + TypeScript + electron-vite app with a lazy filesystem engine a background folder-size worker, and a Canvas 2D radial tree with culling and level of detail (`src/renderer/model.ts`, `layout.ts`, `view.ts`), plus history, path bar and inspector (`src/renderer/main.ts`), file operations (`src/main/ops/`, `src/renderer/ops.ts`), and search/filters (`src/main/fs/search-worker.ts`, `src/renderer/search.ts`, `filter.ts`, `filterpanel.ts`). Stack, engine design and reasons are in `TECHNICAL.md`.
 
 - `NON-TECHNICAL.md` — product vision and UX spec for **Drasil** (the product; the folder is named Reef). Read it before designing features.
 - `TECHNICAL.md` — stack, architecture, known setup issues. Update it when a technical decision is made.
@@ -26,6 +26,8 @@ Phases 1–5 are complete: an Electron + TypeScript + electron-vite app with a l
 
 - `src/main/` is the Electron main process and the only code that touches the filesystem.
 - `src/renderer/` is the sandboxed UI (no Node access). It reaches the disk only through `window.drasil` (`src/preload/`, typed in `src/shared/fs-types.ts`).
+- On-screen code uses `TreeNode.shown` (children after filters and sorting); `children` is the full name-sorted data. Search and filter messages must never claim more coverage than was actually checked.
+- File operations must keep the Phase 6 safety rules in `TECHNICAL.md`: never overwrite (copy with `COPYFILE_EXCL`, "replace" goes to the Trash first), delete a cross-drive move's source only after a full copy, and re-read affected folders afterwards.
 - Directory listing runs in a worker thread (`src/main/fs/`), one level at a time, streamed as batches. Don't add recursive walks that follow links. Validate every IPC argument in `src/main/ipc.ts`.
 - The renderer CSP and navigation blocking in `src/main/index.ts` enforce the no-network rule. Don't loosen them.
 

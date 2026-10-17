@@ -1,27 +1,42 @@
 // Background folder-size calculation. One walk of the chosen root, plus priority walks for the
 // folders the UI is showing. Never follows links, so it can't loop or count anything twice through one.
+// Totals from the last full walk of a root are saved to a local cache file and shown, clearly marked
+// as possibly out of date, until fresh numbers arrive.
 import type { Dirent } from 'node:fs';
-import { lstat, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { parentPort } from 'node:worker_threads';
 import type { SizeEvent, SizeInfo } from '../../shared/fs-types';
+import { skip } from './skip';
 
 export type SizeRequest =
-    { type: 'start'; root: string } | { type: 'watch'; paths: string[] };
+    | {
+          type: 'start';
+          root: string;
+          // Where this root's saved totals live, or null to not use the cache.
+          cacheFile: string | null;
+          excludes: string[];
+      }
+    | { type: 'watch'; paths: string[] }
+    | { type: 'clearCache' };
 
 interface Acc {
     bytes: number;
     items: number;
     // False once anything inside could not be read.
     readable: boolean;
+    // True when an excluded folder was skipped somewhere inside.
+    excluded: boolean;
 }
 
-// Virtual or duplicate filesystems that have no real size on disk (or would be counted twice).
-const SKIP: Record<string, string[]> = {
-    linux: ['/proc', '/sys', '/dev', '/run'],
-    darwin: ['/dev', '/System/Volumes', '/Volumes'],
-};
-const skip = new Set(SKIP[process.platform] ?? []);
+interface SavedFile {
+    root: string;
+    savedAt: number;
+    entries: [string, number, number, boolean, boolean][];
+}
+
+const fold =
+    process.platform === 'linux' ? (s: string) => s : (s: string) => s.toLowerCase();
 
 // Only shallow folders and watched folders are kept, so memory stays bounded on huge disks.
 const CACHE_DEPTH = 2;
@@ -39,6 +54,10 @@ const watched = new Set<string>();
 const dirty = new Set<string>();
 let priority: string[] = [];
 let priorityBusy = false;
+let excludes = new Set<string>();
+let saved = new Map<string, Acc>();
+let savedAt = 0;
+let cacheFile: string | null = null;
 
 function walk(dir: string, depth: number, gen: number): Promise<Acc> {
     const cached = cache.get(dir);
@@ -58,7 +77,7 @@ async function walkUncached(
     depth: number,
     gen: number
 ): Promise<Acc> {
-    const acc: Acc = { bytes: 0, items: 0, readable: true };
+    const acc: Acc = { bytes: 0, items: 0, readable: true, excluded: false };
     const live = (): boolean => gen === generation;
     running.set(dir, acc);
     try {
@@ -79,7 +98,8 @@ async function walkUncached(
                     const path = join(dir, e.name);
                     if (e.isSymbolicLink()) return;
                     if (e.isDirectory()) {
-                        if (!skip.has(path)) subdirs.push(path);
+                        if (excludes.has(fold(path))) acc.excluded = true;
+                        else if (!skip.has(path)) subdirs.push(path);
                         return;
                     }
                     try {
@@ -98,6 +118,7 @@ async function walkUncached(
             acc.bytes += r.bytes;
             acc.items += r.items;
             if (!r.readable) acc.readable = false;
+            if (r.excluded) acc.excluded = true;
         }
         if (live() && (depth <= CACHE_DEPTH || watched.has(dir)))
             cache.set(dir, acc);
@@ -130,12 +151,26 @@ function flush(): void {
                 path,
                 bytes: acc.bytes,
                 items: acc.items,
-                state: acc.readable ? 'complete' : 'incomplete',
+                state: acc.readable && !acc.excluded ? 'complete' : 'incomplete',
+                excluded: acc.excluded || undefined,
             });
     }
     dirty.clear();
-    for (const [path, acc] of running) {
-        if (watched.has(path))
+    for (const path of watched) {
+        if (cache.has(path)) continue;
+        // Until a fresh total exists, a saved one says more than a partial count; it's sent marked
+        // as saved earlier, never as current.
+        const old = saved.get(path);
+        const acc = running.get(path);
+        if (old)
+            sizes.push({
+                path,
+                bytes: old.bytes,
+                items: old.items,
+                state: 'cached',
+                savedAt,
+            });
+        else if (acc)
             sizes.push({
                 path,
                 bytes: acc.bytes,
@@ -150,9 +185,48 @@ function flush(): void {
 
 setInterval(flush, FLUSH_MS);
 
+async function loadSaved(file: string, root: string, gen: number): Promise<void> {
+    try {
+        const data = JSON.parse(await readFile(file, 'utf8')) as SavedFile;
+        if (gen !== generation || data.root !== root || !Array.isArray(data.entries)) return;
+        saved = new Map(
+            data.entries.map(([p, bytes, items, readable, excluded]) => [
+                p,
+                { bytes, items, readable, excluded },
+            ])
+        );
+        savedAt = data.savedAt;
+    } catch {
+        // No cache yet, or unreadable: just calculate.
+    }
+}
+
+async function save(file: string, root: string): Promise<void> {
+    const entries: SavedFile['entries'] = [];
+    for (const [p, a] of cache) entries.push([p, a.bytes, a.items, a.readable, a.excluded]);
+    const data: SavedFile = { root, savedAt: Date.now(), entries: entries.slice(0, 50_000) };
+    try {
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(file + '.tmp', JSON.stringify(data));
+        await rename(file + '.tmp', file);
+    } catch (err) {
+        console.error('Could not save the size cache:', err);
+    }
+}
+
 port.on('message', (msg: SizeRequest) => {
+    if (msg.type === 'clearCache') {
+        saved = new Map();
+        savedAt = 0;
+        return;
+    }
     if (msg.type === 'start') {
         const gen = ++generation;
+        const { root } = msg;
+        cacheFile = msg.cacheFile;
+        excludes = new Set(msg.excludes.map(fold));
+        saved = new Map();
+        if (cacheFile) void loadSaved(cacheFile, root, gen);
         cache.clear();
         running.clear();
         inflight.clear();
@@ -161,8 +235,10 @@ port.on('message', (msg: SizeRequest) => {
         priority = [];
         scanned = 0;
         done = false;
-        walk(msg.root, 0, gen).then(() => {
-            if (gen === generation) done = true;
+        walk(root, 0, gen).then(() => {
+            if (gen !== generation) return;
+            done = true;
+            if (cacheFile) void save(cacheFile, root);
         });
         return;
     }

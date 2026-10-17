@@ -10,6 +10,11 @@ function subscribe<T>(channel: string, callback: (event: T) => void) {
 }
 
 const api: DrasilApi = {
+    platform: process.platform,
+    getSettings: () => ipcRenderer.invoke('settings:get'),
+    setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+    cacheInfo: () => ipcRenderer.invoke('cache:info'),
+    clearCache: () => ipcRenderer.invoke('cache:clear'),
     locations: () => ipcRenderer.invoke('fs:locations'),
     list: (path, id) => ipcRenderer.invoke('fs:list', path, id),
     cancel: (id) => ipcRenderer.send('fs:cancel', id),
@@ -19,6 +24,23 @@ const api: DrasilApi = {
     onSizeEvent: (callback) => subscribe('size:event', callback),
     open: (path) => ipcRenderer.invoke('shell:open', path),
     reveal: (path) => ipcRenderer.invoke('shell:reveal', path),
+    mkdir: (parent, name) => ipcRenderer.invoke('op:mkdir', parent, name),
+    rename: (path, name) => ipcRenderer.invoke('op:rename', path, name),
+    trash: (paths) => ipcRenderer.invoke('op:trash', paths),
+    deletePermanently: (paths) => ipcRenderer.invoke('op:delete', paths),
+    transfer: (id, mode, sources, dest) =>
+        ipcRenderer.invoke('op:transfer', id, mode, sources, dest),
+    resolveConflict: (id, choice, all) =>
+        ipcRenderer.send('op:resolve', id, choice, all),
+    cancelOp: (id) => ipcRenderer.send('op:cancel', id),
+    onOpEvent: (callback) => subscribe('op:event', callback),
+    copyText: (text) => ipcRenderer.send('clipboard:write', text),
+    search: (id, root, query) =>
+        ipcRenderer.invoke('search:start', id, root, query),
+    cancelSearch: (id) => ipcRenderer.send('search:cancel', id),
+    onSearchEvent: (callback) => subscribe('search:event', callback),
+    popupMenu: (entries, x, y) =>
+        ipcRenderer.invoke('menu:popup', entries, x, y),
 };
 
 contextBridge.exposeInMainWorld('drasil', api);

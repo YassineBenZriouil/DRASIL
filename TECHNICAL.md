@@ -29,7 +29,7 @@ Flow: renderer `drasil.list(path, id)` → IPC `fs:list` (main checks the path i
 - **States** (`NodeState`): directories start as `unscanned`. A listing ends as `scanned`, `empty`, `partial` (cancelled or failed midway), `inaccessible` (EACCES/EPERM), `unavailable` (ENOENT, missing drive, stale network mount) or `error`.
 - **Links:** symlinks and Windows junctions get `link.target`. `link.loop` is true when the target is the link's own folder or an ancestor. Any future recursive walk (folder sizes, search) must not follow links.
 - **Locations** (`main/fs/locations.ts`): standard user folders, plus drives. Windows: present drive letters. macOS: `/` and `/Volumes/*`, without the startup-disk alias. Linux: `/` and mounts under `/media/$USER`, `/run/media/$USER` and `/mnt`.
-- **Known limits:** `hidden` only means dotfiles. Windows hidden/system attributes need a native call (planned with the hidden filter in Phase 7). macOS Finder aliases and Windows `.lnk` shortcuts are shown as plain files.
+- **Hidden items:** a leading dot on every OS. On Windows, items with the hidden attribute count too, read with `dir /a:h /b` (`main/fs/hidden.ts`, run alongside the first reads of each listing). macOS Finder aliases and Windows `.lnk` shortcuts are shown as plain files.
 
 ## Radial tree (Phase 3)
 
@@ -57,6 +57,33 @@ Flow: renderer `drasil.list(path, id)` → IPC `fs:list` (main checks the path i
 - **Inspector** (right panel, toggle with I): it is rebuilt only when its layout changes. Otherwise values are updated in place, because sizes update several times a second and rebuilding mid-click would swallow the click.
 - **Open / reveal:** IPC `shell:open` / `shell:reveal` (`shell.openPath` / `shell.showItemInFolder`). The main process checks that the path is absolute and still exists. Both return an error message or `''`.
 - **Keys:** Alt+←/→ back/forward (and mouse buttons 4/5), Alt+↑ or Backspace up, Home overview, C center on the selection, I details, Enter open/toggle, double-click open.
+
+## File operations (Phase 6)
+
+- **Main process** (`main/ops/`): `transfer.ts` (move/copy), `simple.ts` (new folder, rename, Trash, permanent delete), `common.ts` (friendly error messages, `uniqueName`). IPC: `op:mkdir`, `op:rename`, `op:trash`, `op:delete`, `op:transfer` + `op:event` (progress / conflict / done), `op:resolve`, `op:cancel`. Every argument is validated in `ipc.ts`, and names are checked again with `shared/names.ts`.
+- **Safety rules:**
+    - Copies use `COPYFILE_EXCL`, so they never overwrite.
+    - On a conflict the user picks Keep both / Merge folders / Replace / Skip / Cancel everything, optionally for all remaining conflicts. "Replace" first sends the existing item to the Trash. If that fails, nothing is replaced.
+    - A folder can't be moved or copied into itself.
+    - A cross-drive move (`EXDEV`) copies first, then deletes the source only if every part arrived.
+    - Links are copied as links, never followed.
+    - Drive roots can't be renamed or deleted.
+    - Partial results (cancel, failures, partial copies, partly deleted folders) are reported in `OpSummary.notes`.
+- **Known gaps:** copy progress advances per file, not within one large file. There is a tiny window between the conflict check and `rename()` in which a newly created file could be overwritten on macOS/Linux. Both are marked `shortcut:` in the code.
+- **Renderer** (`renderer/ops.ts`): prompts (`renderer/dialog.ts`: one queued `<dialog>`), the app-internal clipboard for cut/copy/paste, progress with Cancel in the footer, and result notices (problems stay until dismissed). After every operation, `afterChange()` re-reads the affected folders (`Tree.refresh`) and restarts the size calculation.
+- **Refresh** (`Tree.refresh` / `relist`): the old entries stay on screen until the new listing is complete. Then they are swapped in, reusing existing nodes by path, so open branches stay open. A rename rewrites the loaded paths in place first, for the same reason.
+- **Selection:** `TreeView.selection` (Ctrl/Cmd+click) plus the primary `selected`. Dragging a node moves the selection onto a folder; hold Ctrl (Option on macOS) to copy. A label always says what will happen and why a drop isn't allowed. Esc cancels. The right-click menu is native (`main/menu.ts`) and only lists actions that apply.
+- **Keys:** Ctrl/Cmd+C/X/V, F2 rename, Delete (Cmd+Backspace on macOS) = Trash, Shift+Delete (Cmd+Option+Backspace) = permanent delete with confirmation, Ctrl/Cmd+Shift+N new folder, F5 refresh, menu key or Shift+F10 = context menu. The performance overlay moved to F9.
+
+## Search, filters and discovery (Phase 7)
+
+- **Search** (`main/fs/search-worker.ts` via `main/fs/search.ts`; IPC `search:start` / `search:cancel` / `search:event`): it walks the current root breadth-first, so shallow matches arrive first. Matching is partial and case-insensitive, comparing names in NFC so decomposed macOS names match. Results stream in batches. It never follows links and skips the virtual folders in `main/fs/skip.ts` (shared with the size worker). It stops at 1,000 matches. Only one search runs at a time; a new one cancels the old.
+- **Coverage:** every search ends with a `SearchCoverage`: folders checked, folders that couldn't be read (with examples), limit reached, cancelled. The results panel (`renderer/search.ts`) states it every time and only says "every readable folder was searched" when that's true.
+- **Going to a result** uses `Tree.reveal`. If the item is gone, or hidden by filters, a notice says so.
+- **Filters** (`renderer/filter.ts`, panel in `renderer/filterpanel.ts`): folders only, file types, minimum size, modified date, show hidden. Type, size and date apply to files only; folders always stay, so the tree keeps its shape. Layout calls `view.pick(t)` and stores the result in `TreeNode.shown`; `children` stays the full, name-sorted list. The view and layout must use `shown` for anything on screen. `layout()` returns how many loaded items were filtered out. The footer says "Filters on: N loaded items hidden (not deleted)", and folder descriptions say how many of their items are hidden.
+- **Sort** by name, size (folder totals so far) or date. Sorting by size re-sorts at most every 2 s while sizes are still being calculated.
+- **Highlight** the 10 largest folders, largest files or oldest files among the items on screen. Drawn as an amber halo (search matches are yellow), always labelled, and listed in the panel. Folder totals that aren't complete say "at least".
+- Ctrl/Cmd+F focuses search. ↓/↑ move through results, Enter goes to one, Esc clears.
 
 ## Privacy guards (in place now)
 

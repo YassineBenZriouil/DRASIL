@@ -9,6 +9,8 @@ export interface TreeNode {
     // Received but not yet merged in. Merging happens once per layout pass, not per batch,
     // so a folder with a million entries isn't re-sorted thousands of times.
     pending: TreeNode[];
+    // Children currently laid out: `children` after filters and sorting (set by layout).
+    shown: TreeNode[];
     depth: number;
     expanded: boolean;
     // Children received so far (or the final count once done).
@@ -61,6 +63,7 @@ function makeNode(node: FsNode, parent: TreeNode | null): TreeNode {
         parent,
         children: [],
         pending: [],
+        shown: [],
         depth: parent ? parent.depth + 1 : 0,
         expanded: false,
         count: 0,
@@ -111,6 +114,13 @@ export class Tree {
     // A previous root to reuse when it shows up in a listing (after going up a level).
     private adopt: TreeNode | null = null;
     private revealing: string | null = null;
+    // Folders being re-read: what they showed before, and the fresh entries so far.
+    private refreshing = new Map<
+        TreeNode,
+        { old: Map<string, TreeNode>; fresh: TreeNode[] }
+    >();
+    // Paths with a file operation in progress (drawn differently).
+    busy = new Set<string>();
 
     constructor(private onChange: (kind: ChangeKind) => void) {
         api.onListEvent((event) => this.handle(event));
@@ -154,15 +164,102 @@ export class Tree {
         // 'partial' state still lands on the node, which may come back through history.
         for (const [id, n] of this.listings)
             if (!contains(t, n)) api.cancel(id);
+        this.loaded = 1 + descendants(t);
+        this.restartSizes();
+        this.onChange('tree');
+    }
+
+    // Recalculate folder sizes from scratch, e.g. after files were changed.
+    restartSizes(): void {
+        const root = this.root;
+        if (!root) return;
         this.sizes.clear();
         this.sizeProgress = { scanned: 0, done: false };
-        this.loaded = 1 + descendants(t);
-        void api.startSizes(t.node.path);
+        void api.startSizes(root.node.path);
         const dirs: string[] = [];
-        for (const d of this.visibleFrom(t, true))
+        for (const d of this.visibleFrom(root, true))
             if (d.node.kind === 'directory') dirs.push(d.node.path);
         this.watch(dirs);
+        this.onChange('sizes');
+    }
+
+    // The loaded node at `path` under the current root, if any.
+    find(path: string): TreeNode | null {
+        let t = this.root;
+        if (!t || !isInside(path, t.node.path)) return null;
+        while (t.node.path !== path) {
+            const next: TreeNode | undefined =
+                t.children.find((c) => isInside(path, c.node.path)) ??
+                t.pending.find((c) => isInside(path, c.node.path));
+            if (!next) return null;
+            t = next;
+        }
+        return t;
+    }
+
+    // Still part of the current tree (not removed by a refresh or outside the root)?
+    has(t: TreeNode): boolean {
+        return this.find(t.node.path) === t;
+    }
+
+    // Re-read these folders from disk. Open branches inside them are kept when they still exist.
+    refresh(paths: string[]): void {
+        for (const path of new Set(paths)) {
+            const t = this.find(path);
+            if (
+                t &&
+                t.node.kind === 'directory' &&
+                t.node.state !== 'unscanned'
+            )
+                this.relist(t);
+        }
+    }
+
+    private relist(t: TreeNode): void {
+        for (const [id, n] of this.listings)
+            if (n === t) {
+                this.listings.delete(id);
+                api.cancel(id);
+            }
+        // Keep showing the old entries until the new listing is complete, then swap them in at once.
+        const old = new Map<string, TreeNode>();
+        for (const c of [...t.children, ...t.pending]) old.set(c.node.path, c);
+        t.pending = [];
+        this.withPending.delete(t);
+        this.refreshing.set(t, { old, fresh: [] });
+        const id = this.nextId++;
+        t.count = 0;
+        t.node.state = 'loading';
+        t.node.error = undefined;
+        this.listings.set(id, t);
+        api.list(t.node.path, id).catch((err: unknown) => {
+            this.listings.delete(id);
+            this.refreshing.delete(t);
+            t.node.state = 'error';
+            t.node.error = String(err);
+            this.onChange('tree');
+        });
         this.onChange('tree');
+    }
+
+    // Update a reused node with fresh data. A folder keeps its listed contents and open state.
+    private reuse(prev: TreeNode, n: FsNode): TreeNode {
+        if (prev.node.kind === 'directory' && n.kind === 'directory') {
+            prev.node = {
+                ...n,
+                state: prev.node.state,
+                error: prev.node.error,
+            };
+        } else {
+            if (prev.node.kind !== n.kind) {
+                prev.children = [];
+                prev.pending = [];
+                prev.expanded = false;
+                prev.count = 0;
+            }
+            prev.node = n;
+        }
+        return prev;
     }
 
     // Open folders one level at a time down to `path`, listing them as needed.
@@ -270,7 +367,31 @@ export class Tree {
         const t = this.listings.get(event.id);
         if (!t) return;
         const counted = this.root !== null && contains(this.root, t);
-        if (event.type === 'batch') {
+        const refresh = this.refreshing.get(t);
+        if (refresh) {
+            if (event.type === 'batch') {
+                for (const n of event.nodes) {
+                    const prev = refresh.old.get(n.path);
+                    refresh.fresh.push(
+                        prev ? this.reuse(prev, n) : makeNode(n, t)
+                    );
+                }
+                t.count += event.nodes.length;
+            } else {
+                this.listings.delete(event.id);
+                this.refreshing.delete(t);
+                t.node.state = event.state;
+                t.node.error = event.error;
+                t.count = event.count;
+                t.children = refresh.fresh.sort(byKindThenName);
+                if (this.root) this.loaded = 1 + descendants(this.root);
+                this.watch(
+                    t.children
+                        .filter((c) => c.node.kind === 'directory')
+                        .map((c) => c.node.path)
+                );
+            }
+        } else if (event.type === 'batch') {
             for (const n of event.nodes) {
                 const old = this.adopt;
                 if (old && n.path === old.node.path) {

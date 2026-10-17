@@ -2,6 +2,7 @@ import type { Dirent } from 'node:fs';
 import { lstat, opendir, readlink, realpath, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import type { FsNode, ListState } from '../../shared/fs-types';
+import { windowsHiddenNames } from './hidden';
 
 const BATCH_SIZE = 256;
 
@@ -87,11 +88,11 @@ async function describeLink(base: Base, dirReal: string): Promise<FsNode> {
 async function describe(
     dir: string,
     dirReal: string,
-    entry: Dirent
+    entry: Dirent,
+    hiddenNames: Set<string>
 ): Promise<FsNode> {
     const path = join(dir, entry.name);
-    // shortcut: dotfiles only; Windows hidden/system attributes need a native call, add with the hidden filter in Phase 7.
-    const hidden = entry.name.startsWith('.');
+    const hidden = entry.name.startsWith('.') || hiddenNames.has(entry.name);
     const base = { path, name: entry.name, hidden };
     try {
         const info = await lstat(path);
@@ -139,13 +140,16 @@ export async function listDirectory(
         return { state, count: 0, error: failMessage(state, err) };
     }
     const dirReal = await realpath(dir).catch(() => dir);
+    // Runs alongside the first reads; only awaited when the first batch is ready.
+    const hiddenNames = windowsHiddenNames(dir);
 
     let count = 0;
     let pending: Dirent[] = [];
     const flush = async (): Promise<void> => {
         if (pending.length === 0) return;
+        const hidden = await hiddenNames;
         const nodes = await Promise.all(
-            pending.map((entry) => describe(dir, dirReal, entry))
+            pending.map((entry) => describe(dir, dirReal, entry, hidden))
         );
         pending = [];
         count += nodes.length;

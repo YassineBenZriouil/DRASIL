@@ -1,7 +1,12 @@
 import type { FsNode, NodeState } from '../shared/fs-types';
 import { ancestry, parentPath } from '../shared/paths';
 import { CATEGORY_NAME, extension, fileCategory } from './filetypes';
+import { isDialogOpen } from './dialog';
+import { passes } from './filter';
+import { FilterPanel } from './filterpanel';
 import { Tree, type TreeNode } from './model';
+import { Ops } from './ops';
+import { Search } from './search';
 import { TreeView } from './view';
 
 const api = window.drasil;
@@ -70,7 +75,12 @@ function describeSize(t: TreeNode): string {
 function describeState(t: TreeNode): string {
     const { node } = t;
     if (node.kind !== 'directory') return STATE_LABEL[node.state];
-    if (node.state === 'scanned') return `${t.count.toLocaleString()} items`;
+    // Filtered-out items are named as hidden, so they're never mistaken for deleted ones.
+    const filtered = t.expanded ? t.children.length - t.shown.length : 0;
+    const hiddenNote =
+        filtered > 0 ? ` (${filtered.toLocaleString()} hidden by filters)` : '';
+    if (node.state === 'scanned')
+        return `${t.count.toLocaleString()} items${hiddenNote}`;
     if (node.state === 'loading')
         return `loading, ${t.count.toLocaleString()} items so far`;
     return STATE_LABEL[node.state];
@@ -328,8 +338,14 @@ function inspectorContent(t: TreeNode): InspectorContent {
             `Show in ${FILE_MANAGER}`,
             () => void runAction(api.reveal(node.path)),
         ],
-        ['Center in tree', () => view.centerOn(t)]
+        ['Center in tree', () => view.centerOn(t)],
+        ['Copy path', () => ops.copyPath([t])]
     );
+    if (t !== tree.root)
+        actions.push(
+            ['Rename…', () => void ops.rename(t)],
+            ['Move to Trash', () => void ops.trash([t])]
+        );
     return { title: node.name, rows: rows.filter(([, v]) => v), actions };
 }
 
@@ -406,15 +422,76 @@ function render(): void {
     renderNav();
 }
 
+let lastRoot: TreeNode | null = null;
 const tree = new Tree((kind) => {
-    if (kind === 'tree') view.relayout();
+    if (kind === 'tree') {
+        view.relayout();
+        // A refresh may have removed selected items.
+        view.pruneSelection();
+    }
+    if (tree.root !== lastRoot) {
+        // Results from the old location don't apply any more.
+        lastRoot = tree.root;
+        search.reset();
+        search.updatePlaceholder();
+    }
+    filters.update(kind);
     render();
 });
-const view = new TreeView(canvas, tree, render, openItem);
-tree.onReveal = (t) => {
+const view = new TreeView(canvas, tree, {
+    select: render,
+    open: openItem,
+    drop: (sources, target, copy) => ops.drop(sources, target, copy),
+    menu: (x, y) => void ops.menu(x, y),
+});
+const ops = new Ops(tree, view, {
+    reveal: (path) => tree.reveal(path),
+    focus: focusOn,
+});
+
+// Where "paste" and "new folder" go: the selected folder, or the folder holding the selected file.
+function folderTarget(): TreeNode | null {
+    const t = view.selected ?? tree.root;
+    if (!t) return null;
+    return t.node.kind === 'directory' ? t : (t.parent ?? tree.root);
+}
+tree.onReveal = (t, found) => {
     view.select(t);
     view.centerOn(t);
+    if (!found)
+        ops.notify(
+            'Couldn’t get to that item. It may have been moved or deleted, or a folder on the way can’t be read.',
+            [],
+            true
+        );
+    else if (!passes(t, filters.filter, Date.now()))
+        ops.notify(
+            `“${t.node.name}” is hidden by the current filters. Clear filters to see it in the tree.`,
+            [],
+            true
+        );
 };
+
+function updateMarks(): void {
+    view.marks = new Map();
+    for (const t of filters.top) view.marks.set(t.node.path, 'top');
+    for (const p of search.matches) view.marks.set(p, 'match');
+    view.redraw();
+}
+const filters = new FilterPanel(
+    tree,
+    view,
+    (t) => {
+        view.select(t);
+        view.centerOn(t);
+    },
+    updateMarks
+);
+const search = new Search(tree, (path) => tree.reveal(path), updateMarks);
+const filtersButton = $('toggle-filters');
+filtersButton.addEventListener('click', () =>
+    filtersButton.setAttribute('aria-pressed', String(filters.toggle()))
+);
 
 function toggleInspector(): void {
     inspector.hidden = !inspector.hidden;
@@ -431,11 +508,44 @@ $('locate').addEventListener('click', () => {
 });
 inspectorButton.addEventListener('click', toggleInspector);
 
+const isMac = api.platform === 'darwin';
 window.addEventListener('keydown', (e) => {
-    if (e.altKey && e.key === 'ArrowLeft') goBack();
+    if (isDialogOpen() || e.target instanceof HTMLInputElement) return;
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    const items = [...view.selection];
+    const folder = folderTarget();
+    // Leave normal text copying alone when the user has selected text on the page.
+    const textSelected = (window.getSelection()?.toString() ?? '') !== '';
+    if (
+        (e.key === 'Delete' && e.shiftKey) ||
+        (isMac && e.metaKey && e.altKey && e.key === 'Backspace')
+    )
+        void ops.deletePermanently(items);
+    else if (
+        (e.key === 'Delete' && !mod) ||
+        (isMac && e.metaKey && e.key === 'Backspace')
+    )
+        void ops.trash(items);
+    else if (mod && key === 'f') search.focus();
+    else if (e.altKey && e.key === 'ArrowLeft') goBack();
     else if (e.altKey && e.key === 'ArrowRight') goForward();
-    else if ((e.altKey && e.key === 'ArrowUp') || e.key === 'Backspace') goUp();
-    else if (e.altKey || e.ctrlKey || e.metaKey) return;
+    else if (
+        (e.altKey && e.key === 'ArrowUp') ||
+        (e.key === 'Backspace' && !mod)
+    )
+        goUp();
+    else if (mod && e.shiftKey && key === 'n') {
+        if (folder) void ops.newFolder(folder);
+    } else if (mod && key === 'c' && items.length && !textSelected)
+        ops.copy(items);
+    else if (mod && key === 'x' && items.length) ops.cut(items);
+    else if (mod && key === 'v' && ops.hasClipboard) {
+        if (folder) void ops.paste(folder);
+    } else if (e.key === 'F2' && view.selected) void ops.rename(view.selected);
+    else if (e.key === 'F5') {
+        if (folder) ops.refresh(folder);
+    } else if (e.altKey || mod) return;
     else if (e.key === 'i' || e.key === 'I') toggleInspector();
     else if ((e.key === 'c' || e.key === 'C') && view.selected)
         view.centerOn(view.selected);

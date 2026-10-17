@@ -1,5 +1,6 @@
 import { CATEGORY_COLOR, fileCategory } from './filetypes';
 import { layout } from './layout';
+import { isInside } from '../shared/paths';
 import type { Tree, TreeNode } from './model';
 
 const COLORS = {
@@ -13,6 +14,7 @@ const COLORS = {
     muted: '#7d8a84',
     select: '#ffffff',
     hover: 'rgba(255, 255, 255, 0.45)',
+    match: '#ffe066',
 };
 
 const TAU = Math.PI * 2;
@@ -34,6 +36,28 @@ const MAX_SCALE = 40;
 // Re-layout at most this often while folders stream in (and never more than half the time).
 const MIN_LAYOUT_MS = 100;
 
+export interface ViewHandlers {
+    // The selection changed.
+    select(): void;
+    // Double-click or Enter: files open in their app, folders become the root.
+    open(t: TreeNode): void;
+    // Items were dragged onto a folder.
+    drop(sources: TreeNode[], target: TreeNode, copy: boolean): void;
+    // Context menu for the current selection, at screen position (x, y).
+    menu(x: number, y: number): void;
+}
+
+interface ItemDrag {
+    sources: TreeNode[];
+    target: TreeNode | null;
+    copy: boolean;
+    problem: string | null;
+    x: number;
+    y: number;
+}
+
+const COPY_KEY = navigator.userAgent.includes('Mac') ? 'Option' : 'Ctrl';
+
 interface Viewport {
     x0: number;
     y0: number;
@@ -47,7 +71,16 @@ interface Viewport {
 }
 
 export class TreeView {
+    // The primary selection (inspector, path bar) plus everything selected with Ctrl/Cmd+click.
     selected: TreeNode | null = null;
+    selection = new Set<TreeNode>();
+    private itemDrag: ItemDrag | null = null;
+    // Which children to show and in what order (filters, sorting). Set by the app.
+    pick: (t: TreeNode) => TreeNode[] = (t) => t.children;
+    // Loaded items left out by `pick` at the last layout.
+    filteredOut = 0;
+    // Paths drawn with a halo and always labelled: search matches and "largest/oldest" highlights.
+    marks = new Map<string, 'match' | 'top'>();
     private hover: TreeNode | null = null;
     private scale = 1;
     private ox = 0;
@@ -73,9 +106,7 @@ export class TreeView {
     constructor(
         private canvas: HTMLCanvasElement,
         private tree: Tree,
-        private onSelect: (t: TreeNode | null) => void,
-        // Double-click or Enter on an item: files open in their app, folders become the root.
-        private onOpen: (t: TreeNode) => void
+        private handlers: ViewHandlers
     ) {
         this.ctx = canvas.getContext('2d')!;
         new ResizeObserver(() => this.resize()).observe(canvas);
@@ -89,9 +120,47 @@ export class TreeView {
     }
 
     select(t: TreeNode | null): void {
+        this.selection.clear();
+        if (t) this.selection.add(t);
         this.selected = t;
-        this.onSelect(t);
+        this.handlers.select();
         this.invalidate();
+    }
+
+    // Ctrl/Cmd+click: add to or remove from the selection.
+    toggleSelected(t: TreeNode): void {
+        if (this.selection.has(t)) {
+            this.selection.delete(t);
+            if (this.selected === t)
+                this.selected = [...this.selection].pop() ?? null;
+        } else {
+            this.selection.add(t);
+            this.selected = t;
+        }
+        this.handlers.select();
+        this.invalidate();
+    }
+
+    // Drop selected nodes that a refresh removed from the tree.
+    pruneSelection(): void {
+        let changed = false;
+        for (const t of this.selection)
+            if (!this.tree.has(t)) {
+                this.selection.delete(t);
+                changed = true;
+            }
+        if (this.selected && !this.selection.has(this.selected)) {
+            this.selected = [...this.selection].pop() ?? null;
+            changed = true;
+        }
+        if (changed) this.handlers.select();
+    }
+
+    // Screen position of a node, for placing a context menu.
+    screenPos(t: TreeNode): [number, number] {
+        const rect = this.canvas.getBoundingClientRect();
+        const [x, y] = this.toScreen(t);
+        return [x + rect.left, y + rect.top];
     }
 
     // Fit the whole tree on screen.
@@ -158,6 +227,11 @@ export class TreeView {
         this.invalidate();
     }
 
+    // Redraw without a new layout (e.g. highlights changed).
+    redraw(): void {
+        this.invalidate();
+    }
+
     private invalidate(): void {
         if (!this.raf) this.raf = requestAnimationFrame(this.frame);
     }
@@ -179,7 +253,7 @@ export class TreeView {
     private runLayout(now: number): void {
         if (!this.layoutDirty || !this.tree.root) return;
         this.tree.flush();
-        layout(this.tree.root);
+        this.filteredOut = layout(this.tree.root, this.pick);
         this.layoutDirty = false;
         this.lastLayout = now;
         this.layoutCost = performance.now() - now;
@@ -211,7 +285,8 @@ export class TreeView {
                 t.y += dy * 0.18;
                 busy = true;
             }
-            if (t.node.state === 'loading') busy = true;
+            if (t.node.state === 'loading' || this.tree.busy.has(t.node.path))
+                busy = true;
         }
         for (const t of this.clusters)
             if (t.node.state === 'loading') busy = true;
@@ -286,7 +361,7 @@ export class TreeView {
         const visit = (t: TreeNode): void => {
             if (t.tx >= v.x0 && t.tx <= v.x1 && t.ty >= v.y0 && t.ty <= v.y1)
                 this.drawn.push(t);
-            const n = t.children.length;
+            const n = t.shown.length;
             if (!t.expanded || n === 0) return;
             if (t.maxRadius < v.minDist || t.radius > v.maxDist) return;
 
@@ -298,8 +373,8 @@ export class TreeView {
             }
 
             for (const [s, e] of this.ranges(t, v)) {
-                for (let i = lowerBound(t.children, t.a0 + s); i < n; i++) {
-                    const c = t.children[i]!;
+                for (let i = lowerBound(t.shown, t.a0 + s); i < n; i++) {
+                    const c = t.shown[i]!;
                     if (c.a0 - t.a0 > e) break;
                     if (c.radius >= v.minDist) this.edges.push(c);
                     if (c.radius <= v.maxDist) visit(c);
@@ -419,19 +494,51 @@ export class TreeView {
         for (const t of this.drawn) this.drawLabel(t);
         for (const t of this.clusters) this.drawClusterLabel(t);
         ctx.globalAlpha = 1;
+        if (this.itemDrag) this.drawDragLabel(this.itemDrag);
+    }
+
+    // Says exactly what will happen on release: move or copy, how many, and where.
+    private drawDragLabel(d: ItemDrag): void {
+        const { ctx } = this;
+        const n = d.sources.length;
+        const what = `${d.copy ? 'Copy' : 'Move'} ${n === 1 ? `“${d.sources[0]!.node.name}”` : `${n} items`}`;
+        let text: string;
+        if (d.problem) text = d.problem;
+        else if (d.target) text = `${what} to “${d.target.node.name}”`;
+        else text = `${what} — drop on a folder`;
+        const hint = d.copy ? '' : ` (hold ${COPY_KEY} to copy)`;
+        const full = d.problem ? text : text + hint;
+        ctx.font = `${FONT_PX}px system-ui, sans-serif`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const w = ctx.measureText(full).width + 16;
+        const x = Math.min(d.x + 16, this.width - w - 4);
+        const y = d.y + 20;
+        ctx.fillStyle = 'rgba(14, 18, 24, 0.95)';
+        ctx.strokeStyle = d.problem ? COLORS.warn : COLORS.folder;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(x, y - 12, w, 24, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = d.problem ? COLORS.warn : COLORS.label;
+        ctx.fillText(full, x + 8, y);
     }
 
     private drawLabel(t: TreeNode): void {
         const { ctx } = this;
-        const focus = t === this.selected || t === this.hover;
+        const focus =
+            this.marks.has(t.node.path) ||
+            this.selection.has(t) ||
+            t === this.hover ||
+            t === this.itemDrag?.target;
         const isRoot = t === this.tree.root;
         if (!focus && !isRoot && this.siblingPx(t) < LABEL_PX) return;
         const r = this.nodePx(t);
         // Room before the children's ring; leaves can run outward freely.
-        const room =
-            t.expanded && t.children.length
-                ? (t.childRadius - t.radius) * this.scale - r - 16
-                : 260;
+        const room = t.shown.length
+            ? (t.childRadius - t.radius) * this.scale - r - 16
+            : 260;
         const maxChars = Math.floor(room / (FONT_PX * 0.55));
         if (maxChars < 4 && !focus) return;
         const name = t.node.name;
@@ -469,7 +576,7 @@ export class TreeView {
         ctx.fillStyle = COLORS.muted;
         ctx.textAlign = 'center';
         ctx.fillText(
-            `${t.count.toLocaleString()}${more} items · zoom in`,
+            `${t.shown.length.toLocaleString()}${more} items · zoom in`,
             sx,
             sy - 14
         );
@@ -478,19 +585,45 @@ export class TreeView {
     private drawNode(t: TreeNode, px: number, time: number): void {
         const { ctx } = this;
         const r = this.nodePx(t) * px;
-        ctx.globalAlpha = t.node.hidden ? 0.55 : 1;
+        const busy = this.tree.busy.has(t.node.path);
+        // Items being moved, copied or deleted pulse until the operation finishes.
+        ctx.globalAlpha =
+            (t.node.hidden ? 0.55 : 1) *
+            (busy ? 0.45 + 0.35 * Math.sin(time / 200) : 1);
         ctx.lineWidth = 1.5 * px;
         if (t.node.kind === 'directory') this.drawFolder(t, r, px, time);
         else this.drawLeaf(t, r, px);
 
-        if (t === this.selected || t === this.hover) {
+        const mark = this.marks.get(t.node.path);
+        if (mark) {
+            // A soft filled halo, so it reads differently from the selection ring.
+            ctx.globalAlpha = 0.35;
+            ctx.fillStyle = mark === 'match' ? COLORS.match : COLORS.warn;
+            ctx.beginPath();
+            ctx.arc(t.x, t.y, r + 7 * px, 0, TAU);
+            ctx.fill();
             ctx.globalAlpha = 1;
-            ctx.strokeStyle =
-                t === this.selected ? COLORS.select : COLORS.hover;
-            ctx.lineWidth = 2 * px;
+        }
+        const selected = this.selection.has(t);
+        if (selected || t === this.hover) {
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = selected ? COLORS.select : COLORS.hover;
+            ctx.lineWidth = (t === this.selected ? 2 : 1.5) * px;
             ctx.beginPath();
             ctx.arc(t.x, t.y, r + 4 * px, 0, TAU);
             ctx.stroke();
+        }
+        if (t === this.itemDrag?.target) {
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = this.itemDrag.problem
+                ? COLORS.warn
+                : COLORS.folder;
+            ctx.lineWidth = 2.5 * px;
+            ctx.setLineDash([3 * px, 3 * px]);
+            ctx.beginPath();
+            ctx.arc(t.x, t.y, r + 9 * px, 0, TAU);
+            ctx.stroke();
+            ctx.setLineDash([]);
         }
         ctx.globalAlpha = 1;
     }
@@ -651,6 +784,34 @@ export class TreeView {
         return null;
     }
 
+    private updateItemDrag(
+        item: TreeNode,
+        e: PointerEvent,
+        [sx, sy]: [number, number]
+    ): void {
+        const sources = (
+            this.selection.has(item) ? [...this.selection] : [item]
+        ).filter((t) => t !== this.tree.root);
+        const hit = this.hitTest(sx, sy);
+        const target = hit && hit.node.kind === 'directory' ? hit : null;
+        const copy = COPY_KEY === 'Option' ? e.altKey : e.ctrlKey;
+        this.itemDrag = {
+            sources,
+            target,
+            copy,
+            problem: target ? dropProblem(sources, target, copy) : null,
+            x: sx,
+            y: sy,
+        };
+        this.canvas.style.cursor =
+            !target || this.itemDrag.problem
+                ? 'no-drop'
+                : copy
+                  ? 'copy'
+                  : 'move';
+        this.invalidate();
+    }
+
     private zoomAt(sx: number, sy: number, factor: number): void {
         this.cam = null;
         const next = Math.min(
@@ -672,6 +833,8 @@ export class TreeView {
             ox: number;
             oy: number;
             moved: boolean;
+            // Node under the pointer at press time: dragging it moves files instead of panning.
+            item: TreeNode | null;
         } | null = null;
         const local = (e: MouseEvent): [number, number] => {
             const rect = c.getBoundingClientRect();
@@ -682,12 +845,16 @@ export class TreeView {
             if (e.button !== 0) return;
             c.setPointerCapture(e.pointerId);
             this.cam = null;
+            const [sx, sy] = local(e);
+            const item = this.hitTest(sx, sy);
             drag = {
                 x: e.clientX,
                 y: e.clientY,
                 ox: this.ox,
                 oy: this.oy,
                 moved: false,
+                // The root can't be moved; dragging it pans.
+                item: item === this.tree.root ? null : item,
             };
         });
         c.addEventListener('pointermove', (e) => {
@@ -695,7 +862,9 @@ export class TreeView {
                 const dx = e.clientX - drag.x;
                 const dy = e.clientY - drag.y;
                 if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
-                if (drag.moved) {
+                if (drag.moved && drag.item) {
+                    this.updateItemDrag(drag.item, e, local(e));
+                } else if (drag.moved) {
                     this.ox = drag.ox + dx;
                     this.oy = drag.oy + dy;
                     c.style.cursor = 'grabbing';
@@ -716,9 +885,21 @@ export class TreeView {
             const wasDrag = drag?.moved;
             drag = null;
             c.style.cursor = this.hover ? 'pointer' : 'grab';
+            const d = this.itemDrag;
+            if (d) {
+                this.itemDrag = null;
+                this.invalidate();
+                if (d.target && !d.problem)
+                    this.handlers.drop(d.sources, d.target, d.copy);
+                return;
+            }
             if (wasDrag) return;
             const [sx, sy] = local(e);
             const hit = this.hitTest(sx, sy);
+            if (hit && (e.ctrlKey || e.metaKey)) {
+                this.toggleSelected(hit);
+                return;
+            }
             if (hit) {
                 this.select(hit);
                 this.tree.toggle(hit);
@@ -727,7 +908,7 @@ export class TreeView {
             const cluster = this.hitCluster(sx, sy);
             if (cluster) {
                 // Zoom in far enough for the group to open into individual items.
-                const n = cluster.children.length;
+                const n = cluster.shown.length;
                 const spacing =
                     (((cluster.a1 - cluster.a0) * cluster.childRadius) / n) *
                     this.scale;
@@ -740,7 +921,14 @@ export class TreeView {
         c.addEventListener('dblclick', (e) => {
             const [sx, sy] = local(e);
             const hit = this.hitTest(sx, sy);
-            if (hit) this.onOpen(hit);
+            if (hit && !(e.ctrlKey || e.metaKey)) this.handlers.open(hit);
+        });
+        c.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const hit = this.hitTest(...local(e));
+            if (!hit) this.select(null);
+            else if (!this.selection.has(hit)) this.select(hit);
+            this.handlers.menu(e.clientX, e.clientY);
         });
         c.addEventListener('pointerleave', () => {
             if (this.hover) {
@@ -761,9 +949,25 @@ export class TreeView {
         );
         c.addEventListener('keydown', (e) => {
             const t = this.selected;
-            if (e.key === 'Enter' && t && t.node.kind !== 'directory') {
+            if (e.key === 'Escape' && this.itemDrag) {
+                // Cancel the drag; releasing the button then does nothing.
+                this.itemDrag = null;
+                if (drag) drag.item = null;
+                this.invalidate();
+            } else if (e.key === 'Escape' && this.selection.size) {
+                this.select(null);
+            } else if (
+                e.key === 'ContextMenu' ||
+                (e.shiftKey && e.key === 'F10')
+            ) {
                 e.preventDefault();
-                this.onOpen(t);
+                const [x, y] = t
+                    ? this.screenPos(t)
+                    : [this.width / 2, this.height / 2];
+                this.handlers.menu(x, y);
+            } else if (e.key === 'Enter' && t && t.node.kind !== 'directory') {
+                e.preventDefault();
+                this.handlers.open(t);
             } else if ((e.key === 'Enter' || e.key === ' ') && t) {
                 e.preventDefault();
                 this.tree.toggle(t);
@@ -773,11 +977,28 @@ export class TreeView {
                 this.zoomAt(this.width / 2, this.height / 2, 1.25);
             } else if (e.key === '-') {
                 this.zoomAt(this.width / 2, this.height / 2, 0.8);
-            } else if (e.key === 'F2') {
+            } else if (e.key === 'F9') {
                 this.toggleStats();
             }
         });
     }
+}
+
+// Why `sources` can't be dropped on `target`, or null if they can.
+function dropProblem(
+    sources: TreeNode[],
+    target: TreeNode,
+    copy: boolean
+): string | null {
+    const s = target.node.state;
+    if (s === 'inaccessible' || s === 'unavailable' || s === 'error')
+        return 'Can’t put items in this folder';
+    for (const src of sources)
+        if (isInside(target.node.path, src.node.path))
+            return `Can’t ${copy ? 'copy' : 'move'} a folder into itself`;
+    if (!copy && sources.every((src) => src.parent === target))
+        return 'Already in this folder';
+    return null;
 }
 
 function clampScale(s: number): number {

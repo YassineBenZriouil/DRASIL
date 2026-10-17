@@ -24,6 +24,22 @@
                 </button>
             </div>
             <nav id="locations" aria-label="Locations"></nav>
+            <input
+                id="search"
+                type="search"
+                placeholder="Search"
+                aria-label="Search names in the current location (Ctrl+F)"
+                aria-controls="search-panel"
+                disabled
+            />
+            <button
+                id="toggle-filters"
+                title="Filters, sorting and highlights"
+                aria-pressed="false"
+                aria-controls="filters-panel"
+            >
+                Filters
+            </button>
             <div class="group end" role="toolbar" aria-label="View">
                 <button id="fit" title="See the whole tree (Home)">
                     Overview
@@ -47,8 +63,27 @@
                 <canvas
                     id="world"
                     tabindex="0"
-                    aria-label="File tree. Click a folder to open or close it, double-click to make it the root. Double-click a file to open it. Drag to move, scroll to zoom. Enter opens, Home shows the whole tree, C centers the selection, plus and minus zoom, F2 shows performance stats."
+                    aria-label="File tree. Click a folder to open or close it, double-click to make it the root. Double-click a file to open it. Ctrl-click (Cmd-click on Mac) selects several items. Drag empty space to move around, drag items onto a folder to move them (hold Ctrl, or Option on Mac, to copy). Right-click or press the menu key for actions. Scroll to zoom. Enter opens, Home shows the whole tree, C centers the selection, Escape clears the selection, plus and minus zoom, F9 shows performance stats."
                 ></canvas>
+                <section
+                    id="search-panel"
+                    class="panel left"
+                    aria-label="Search results"
+                    hidden
+                >
+                    <p id="search-status" role="status"></p>
+                    <ul id="search-results" role="listbox"></ul>
+                    <p class="hint-inline">
+                        Links aren’t followed, and virtual system folders are
+                        skipped.
+                    </p>
+                </section>
+                <section
+                    id="filters-panel"
+                    class="panel right"
+                    aria-label="Filters and sorting"
+                    hidden
+                ></section>
                 <p id="hint" class="hint">
                     Choose a location to start exploring.
                 </p>
@@ -57,8 +92,11 @@
                 <p class="hint-inline">Select a file or folder.</p>
             </aside>
         </main>
+        <div id="notices" role="status" aria-live="polite"></div>
         <footer>
             <div id="status" aria-live="polite"></div>
+            <div id="ops"></div>
+            <div id="filter-status" role="status"></div>
             <div id="activity"></div>
             <div class="legend" aria-label="Folder shapes">
                 <span>◌ not scanned</span>
@@ -70,6 +108,7 @@
                 <span>△ error</span>
             </div>
         </footer>
+        <dialog id="dialog"></dialog>
         <script type="module" src="./main.ts"></script>
     </body>
 </html>

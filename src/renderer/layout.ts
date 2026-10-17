@@ -9,11 +9,19 @@ const MAX_GAP = 100_000;
 
 // Radial layout: each node gets a slice of its parent's wedge. Bigger subtrees get more room,
 // with a square root so that one huge folder can't squeeze its siblings into slivers.
-export function layout(root: TreeNode): void {
+// `pick` chooses which children are shown, in what order (filters and sorting); the result is
+// stored in `shown`. Returns how many loaded children were left out by `pick`.
+export function layout(
+    root: TreeNode,
+    pick: (t: TreeNode) => TreeNode[]
+): number {
+    let filteredOut = 0;
     const weights = new Map<TreeNode, number>();
     const weigh = (t: TreeNode): number => {
+        t.shown = t.expanded ? pick(t) : [];
+        if (t.expanded) filteredOut += t.children.length - t.shown.length;
         let sum = 0;
-        if (t.expanded) for (const c of t.children) sum += weigh(c);
+        for (const c of t.shown) sum += weigh(c);
         const w = sum > 0 ? 1 + Math.sqrt(sum) : 1;
         weights.set(t, w);
         return w;
@@ -33,8 +41,8 @@ export function layout(root: TreeNode): void {
         t.tx = Math.cos(t.angle) * radius;
         t.ty = Math.sin(t.angle) * radius;
         t.maxRadius = radius;
-        const n = t.children.length;
-        if (!t.expanded || n === 0) {
+        const n = t.shown.length;
+        if (n === 0) {
             t.childRadius = radius + RING;
             return radius;
         }
@@ -45,9 +53,9 @@ export function layout(root: TreeNode): void {
             Math.min(needed, radius + MAX_GAP)
         );
         let total = 0;
-        for (const c of t.children) total += weights.get(c)!;
+        for (const c of t.shown) total += weights.get(c)!;
         let a = a0;
-        for (const c of t.children) {
+        for (const c of t.shown) {
             const s = (span * weights.get(c)!) / total;
             t.maxRadius = Math.max(
                 t.maxRadius,
@@ -59,4 +67,5 @@ export function layout(root: TreeNode): void {
     };
     // Start at 12 o'clock and go clockwise.
     place(root, -Math.PI / 2, (3 * Math.PI) / 2, 0);
+    return filteredOut;
 }

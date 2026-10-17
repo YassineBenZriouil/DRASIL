@@ -1,6 +1,7 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, nativeTheme } from 'electron';
 import { join } from 'node:path';
 import { registerIpc } from './ipc';
+import { currentSettings, loadSettings } from './settings';
 
 function createWindow(): void {
     const win = new BrowserWindow({
@@ -9,7 +10,8 @@ function createWindow(): void {
         minWidth: 640,
         minHeight: 480,
         title: 'Drasil',
-        backgroundColor: '#07090d',
+        // Matches the page background of the active theme, so there's no flash while loading.
+        backgroundColor: nativeTheme.shouldUseDarkColors ? '#07090d' : '#f6f7f5',
         show: false,
         webPreferences: {
             preload: join(__dirname, '../preload/index.js'),
@@ -21,6 +23,10 @@ function createWindow(): void {
 
     // Show only once painted, so there is no white flash before the dark theme.
     win.once('ready-to-show', () => win.show());
+    // Zoom resets on each page load; reapply the interface scale.
+    win.webContents.on('did-finish-load', () =>
+        win.webContents.setZoomFactor(currentSettings()?.uiScale ?? 1)
+    );
 
     // Privacy: the app never navigates or opens windows to external sites.
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -33,8 +39,9 @@ function createWindow(): void {
     }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     registerIpc();
+    await loadSettings();
     createWindow();
 
     // macOS: re-create a window when the dock icon is clicked and none are open.
