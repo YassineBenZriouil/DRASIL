@@ -1,0 +1,62 @@
+# Installers for Windows, macOS and Linux. See docs/RELEASING.md for signing and publishing.
+appId: app.drasil
+productName: Drasil
+copyright: Copyright © 2026 The Drasil authors
+
+directories:
+    output: dist
+    buildResources: build
+
+files:
+    - out/**
+    - package.json
+# Worker threads load their script files directly, so keep them outside the asar archive.
+asarUnpack:
+    - out/main/**
+
+artifactName: Drasil-${version}-${os}-${arch}.${ext}
+
+# Owner and repo come from "repository" in package.json. Releases start as drafts, so a person
+# checks every file before anything is public.
+publish:
+    provider: github
+    releaseType: draft
+
+win:
+    target:
+        - target: nsis
+          arch: [x64, arm64]
+    # Signed when CSC_LINK / CSC_KEY_PASSWORD (or WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD) are set.
+
+nsis:
+    oneClick: false
+    # Per-user install: no administrator rights needed.
+    perMachine: false
+    allowToChangeInstallationDirectory: true
+    # Uninstalling never touches the user's files; settings and the size cache are kept too.
+    deleteAppDataOnUninstall: false
+
+mac:
+    target:
+        - target: dmg
+          arch: [x64, arm64]
+        # The zip is what in-app updates download.
+        - target: zip
+          arch: [x64, arm64]
+    category: public.app-category.productivity
+    hardenedRuntime: true
+    # Uses APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID from the environment.
+    notarize: true
+    # Shown by macOS the first time Drasil opens these places.
+    extendInfo:
+        NSDesktopFolderUsageDescription: Drasil shows and manages the files on your Desktop.
+        NSDocumentsFolderUsageDescription: Drasil shows and manages the files in your Documents folder.
+        NSDownloadsFolderUsageDescription: Drasil shows and manages the files in your Downloads folder.
+        NSRemovableVolumesUsageDescription: Drasil shows and manages the files on removable drives.
+        NSNetworkVolumesUsageDescription: Drasil shows and manages the files on network drives.
+
+linux:
+    target: [AppImage, deb, rpm]
+    category: Utility
+    synopsis: A living world for your files
+    description: Drasil shows your files as an interactive radial tree and lets you manage them right there.

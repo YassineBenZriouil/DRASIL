@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Worker } from 'node:worker_threads';
+import { log } from '../log';
 import type { SizeEvent } from '../../shared/fs-types';
 import { currentSettings } from '../settings';
 import type { SizeRequest } from './size-worker';
@@ -23,7 +24,7 @@ function post(msg: SizeRequest): void {
         w.on('message', (event: SizeEvent) => {
             if (owner && !owner.isDestroyed()) owner.send('size:event', event);
         });
-        w.on('error', (err) => console.error('Size worker failed:', err));
+        w.on('error', (err) => log('Size worker failed:', err));
         w.on('exit', (code) => {
             worker = null;
             // Ask the window to start over, so totals never stay stuck at "calculating".

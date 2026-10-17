@@ -1,0 +1,57 @@
+# Builds, signs and publishes installers for every platform when a version tag (v1.2.3) is pushed.
+# The GitHub release is created as a draft: check the files, then publish it by hand.
+# Secrets needed are listed in docs/RELEASING.md.
+name: Release
+
+on:
+    push:
+        tags: ['v*']
+
+permissions:
+    contents: write
+
+jobs:
+    release:
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [windows-latest, macos-latest, ubuntu-latest]
+        runs-on: ${{ matrix.os }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
+
+            - name: Tag must match package.json version
+              shell: bash
+              run: |
+                  version="v$(node -p "require('./package.json').version")"
+                  if [ "$version" != "$GITHUB_REF_NAME" ]; then
+                    echo "Tag $GITHUB_REF_NAME does not match package.json ($version)"; exit 1
+                  fi
+
+            - name: Linux packaging tools
+              if: runner.os == 'Linux'
+              run: sudo apt-get update && sudo apt-get install -y rpm
+
+            - run: npm ci
+            - run: npm run typecheck
+            - run: npm run lint
+            - run: npm run build
+
+            - name: Build, sign and publish
+              run: npx electron-builder --publish always
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  # Windows: code-signing certificate (.pfx, base64) and its password.
+                  WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+                  WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+                  # macOS: Developer ID Application certificate (.p12, base64) and its password,
+                  # plus the Apple account used for notarization.
+                  CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
+                  CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+                  APPLE_ID: ${{ secrets.APPLE_ID }}
+                  APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+                  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

@@ -1,5 +1,6 @@
 import type { WebContents } from 'electron';
 import type { Worker } from 'node:worker_threads';
+import { log } from '../log';
 import type { ListEvent } from '../../shared/fs-types';
 import type { WorkerRequest } from './worker';
 import createWorker from './worker?nodeWorker';
@@ -35,7 +36,7 @@ function getWorker(): Worker {
         if (event.type === 'done') requests.delete(event.id);
         send(req.owner, { ...event, id: req.clientId });
     });
-    w.on('error', (err) => console.error('Filesystem worker failed:', err));
+    w.on('error', (err) => log('Filesystem worker failed:', err));
     // If the worker dies, every open listing ends with an error instead of hanging.
     w.on('exit', () => {
         worker = null;

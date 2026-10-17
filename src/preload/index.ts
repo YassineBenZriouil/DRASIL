@@ -38,6 +38,11 @@ const api: DrasilApi = {
     watchFolders: (paths) => ipcRenderer.send('watch:set', paths),
     onFsChanged: (callback) => subscribe('fs:changed', callback),
     logError: (message) => ipcRenderer.send('log:error', message),
+    appInfo: () => ipcRenderer.invoke('app:info'),
+    checkForUpdates: () => ipcRenderer.send('app:checkUpdates'),
+    openLink: (kind) => ipcRenderer.send('app:link', kind),
+    openLogFolder: () => ipcRenderer.send('app:openLogs'),
+    onMenuCommand: (callback) => subscribe('menu:command', callback),
     search: (id, root, query) =>
         ipcRenderer.invoke('search:start', id, root, query),
     cancelSearch: (id) => ipcRenderer.send('search:cancel', id),

@@ -10,17 +10,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-Phases 1–9 are complete: an Electron + TypeScript + electron-vite app with a lazy filesystem engine a background folder-size worker, and a Canvas 2D radial tree with culling and level of detail (`src/renderer/model.ts`, `layout.ts`, `view.ts`), plus history, path bar and inspector (`src/renderer/main.ts`), file operations (`src/main/ops/`, `src/renderer/ops.ts`), search/filters (`src/main/fs/search-worker.ts`, `src/renderer/search.ts`, `filter.ts`, `filterpanel.ts`), settings, shortcuts and the accessible list view (`src/shared/settings.ts`, `src/renderer/keys.ts`, `listview.ts`, `settingsui.ts`), and onboarding, outside-change polling and crash handling (`src/renderer/welcome.ts`, `src/main/watch.ts`, `src/main/log.ts`). Stack, engine design and reasons are in `TECHNICAL.md`.
+All 10 phases are complete: an Electron + TypeScript + electron-vite app with a lazy filesystem engine a background folder-size worker, and a Canvas 2D radial tree with culling and level of detail (`src/renderer/model.ts`, `layout.ts`, `view.ts`), plus history, path bar and inspector (`src/renderer/main.ts`), file operations (`src/main/ops/`, `src/renderer/ops.ts`), search/filters (`src/main/fs/search-worker.ts`, `src/renderer/search.ts`, `filter.ts`, `filterpanel.ts`), settings, shortcuts and the accessible list view (`src/shared/settings.ts`, `src/renderer/keys.ts`, `listview.ts`, `settingsui.ts`), onboarding, outside-change polling and crash handling (`src/renderer/welcome.ts`, `src/main/watch.ts`, `src/main/log.ts`), and release packaging, ask-first updates and docs (`electron-builder.yml`, `src/main/updates.ts`, `src/main/network.ts`, `.github/workflows/`, `docs/RELEASING.md`). Stack, engine design and reasons are in `docs/TECHNICAL.md`.
 
-- `NON-TECHNICAL.md` — product vision and UX spec for **Drasil** (the product; the folder is named Reef). Read it before designing features.
-- `TECHNICAL.md` — stack, architecture, known setup issues. Update it when a technical decision is made.
-- `PHASES.md` — the 10-phase roadmap to public release; each phase has exit criteria that gate the next.
+- `docs/NON-TECHNICAL.md` — product vision and UX spec for **Drasil** (the product; the folder is named Reef). Read it before designing features.
+- `docs/TECHNICAL.md` — stack, architecture, known setup issues. Update it when a technical decision is made.
+- `docs/PHASES.md` — the 10-phase roadmap to public release; each phase has exit criteria that gate the next.
 
 ## Commands
 
 - `npm run dev` — run with hot reload
 - `npm run build` — build to `out/`; `npm start` runs the build
 - `npm run typecheck`, `npm run lint`, `npm run format:check`
+- `npm run dist` / `npm run dist:dir` — installers / unpacked app in `dist/` (set `CSC_IDENTITY_AUTO_DISCOVERY=false` for unsigned local builds)
+- `OWNER` in `package.json` (and the docs) is a placeholder for the GitHub owner; see `docs/RELEASING.md`.
 
 ## Architecture
 
@@ -28,9 +30,9 @@ Phases 1–9 are complete: an Electron + TypeScript + electron-vite app with a l
 - `src/renderer/` is the sandboxed UI (no Node access). It reaches the disk only through `window.drasil` (`src/preload/`, typed in `src/shared/fs-types.ts`).
 - Keyboard shortcuts live only in the `Keymap` command list in `src/renderer/main.ts` (see `keys.ts`). Colors live only as CSS tokens in `style.css` (the canvas reads them), and changes must keep WCAG AA contrast in both themes. Anything shown on the canvas must also reach the list view and screen readers.
 - On-screen code uses `TreeNode.shown` (children after filters and sorting); `children` is the full name-sorted data. Search and filter messages must never claim more coverage than was actually checked.
-- File operations must keep the Phase 6 safety rules in `TECHNICAL.md`: never overwrite (copy with `COPYFILE_EXCL`, "replace" goes to the Trash first), delete a cross-drive move's source only after a full copy, and re-read affected folders afterwards.
+- File operations must keep the Phase 6 safety rules in `docs/TECHNICAL.md`: never overwrite (copy with `COPYFILE_EXCL`, "replace" goes to the Trash first), delete a cross-drive move's source only after a full copy, and re-read affected folders afterwards.
 - Directory listing runs in a worker thread (`src/main/fs/`), one level at a time, streamed as batches. Don't add recursive walks that follow links. Validate every IPC argument in `src/main/ipc.ts`.
-- The network block in `src/main/index.ts` (`blockNetwork`) must stay: the app makes no network requests. Don't switch outside-change detection to `fs.watch` (see `src/main/watch.ts` for why).
+- The network block (`blockNetwork` in `src/main/network.ts`) must stay; the only allowed traffic is the user-started update check to GitHub: the app makes no network requests. Don't switch outside-change detection to `fs.watch` (see `src/main/watch.ts` for why).
 - The renderer CSP and navigation blocking in `src/main/index.ts` enforce the no-network rule. Don't loosen them.
 
 ## Product summary

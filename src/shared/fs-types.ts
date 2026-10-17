@@ -189,6 +189,18 @@ export interface DrasilApi {
     watchFolders(paths: string[]): void;
     onFsChanged(callback: (paths: string[]) => void): () => void;
     logError(message: string): void;
+    appInfo(): Promise<{
+        version: string;
+        canSelfUpdate: boolean;
+        license: string;
+    }>;
+    checkForUpdates(): void;
+    openLink(
+        kind: 'guide' | 'privacy' | 'download' | 'issues' | 'license' | 'bug'
+    ): void;
+    openLogFolder(): void;
+    // Commands chosen from the macOS app menu (ids from the shortcut registry).
+    onMenuCommand(callback: (id: string) => void): () => void;
     // Searches names under `root` (partial, case-insensitive). Starting a new search cancels the last one.
     search(id: number, root: string, query: string): Promise<void>;
     cancelSearch(id: number): void;

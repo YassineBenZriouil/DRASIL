@@ -5,7 +5,15 @@ import { cancel, list } from './fs/engine';
 import { getLocations } from './fs/locations';
 import { cancelSearch, startSearch } from './fs/search';
 import { cacheInfo, clearCache, startSizes, watchSizes } from './fs/sizes';
+import {
+    appInfo,
+    LINK_KINDS,
+    openLink,
+    openLogFolder,
+    type LinkKind,
+} from './about';
 import { log } from './log';
+import { checkForUpdates } from './updates';
 import { loadSettings, updateSettings } from './settings';
 import { setWatched } from './watch';
 import { isMenuEntries, popupMenu } from './menu';
@@ -169,6 +177,13 @@ export function registerIpc(): void {
     ipcMain.on('log:error', (_, message: unknown) => {
         if (typeof message === 'string')
             log('Window error', message.slice(0, 4000));
+    });
+
+    ipcMain.handle('app:info', () => appInfo());
+    ipcMain.on('app:checkUpdates', () => void checkForUpdates());
+    ipcMain.on('app:openLogs', () => openLogFolder());
+    ipcMain.on('app:link', (_, kind: unknown) => {
+        if (LINK_KINDS.includes(kind as LinkKind)) openLink(kind as LinkKind);
     });
 
     ipcMain.handle('settings:get', () => loadSettings());

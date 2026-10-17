@@ -371,7 +371,54 @@ export class SettingsUI {
             'Privacy',
             h(
                 'p',
-                'Drasil works entirely on this computer. It never sends file names, paths or any other information anywhere.',
+                'Drasil works entirely on this computer. It never sends file names, paths or any other information anywhere. The only time it goes online is to check for updates, and only when you ask it to (or turn on the weekly check below).',
+                'hint-inline'
+            )
+        );
+
+        // About and updates
+        const about = await api.appInfo();
+        const link = (
+            label: string,
+            kind: Parameters<typeof api.openLink>[0]
+        ): HTMLButtonElement => {
+            const b = h('button', label);
+            b.addEventListener('click', () => api.openLink(kind));
+            return b;
+        };
+        const check = h('button', 'Check for updates…');
+        check.addEventListener('click', () => api.checkForUpdates());
+        const logs = h('button', 'Open the log folder');
+        logs.addEventListener('click', () => api.openLogFolder());
+        const links = h('div', undefined, 'inline');
+        links.append(
+            check,
+            link('User guide', 'guide'),
+            link('Privacy', 'privacy'),
+            link('Report a bug', 'bug'),
+            link('Download page', 'download'),
+            logs
+        );
+        section(
+            'about',
+            'About',
+            h('p', `Drasil ${about.version} · ${about.license} license`),
+            checkRow(
+                'Check for updates once a week',
+                s.autoCheckUpdates,
+                (autoCheckUpdates) => void save({ autoCheckUpdates })
+            ),
+            h(
+                'p',
+                about.canSelfUpdate
+                    ? 'Updates are never downloaded or installed without asking you first.'
+                    : 'This copy is updated by your package manager (or from the download page).',
+                'hint-inline'
+            ),
+            links,
+            h(
+                'p',
+                'Links open in your web browser. Bug reports include only the version and system you’re on; you choose what else to share. The log folder holds a local error log you can attach.',
                 'hint-inline'
             )
         );

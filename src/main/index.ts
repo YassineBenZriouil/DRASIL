@@ -1,7 +1,10 @@
-import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron';
+import { app, BrowserWindow, dialog, Menu, nativeTheme } from 'electron';
 import { join } from 'node:path';
 import { registerIpc } from './ipc';
+import { openLink } from './about';
 import { log } from './log';
+import { blockNetwork } from './network';
+import { checkForUpdates, maybeCheckWeekly } from './updates';
 import { currentSettings, loadSettings } from './settings';
 
 function createWindow(): void {
@@ -66,26 +69,68 @@ function createWindow(): void {
     }
 }
 
-// Privacy guard: no request may leave the computer. Only the app's own files (and the local
-// dev server while developing) load; anything else is blocked and logged as a bug.
-function blockNetwork(): void {
-    const dev = process.env['ELECTRON_RENDERER_URL'];
-    const devHost = dev ? new URL(dev).host : null;
-    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-        const url = new URL(details.url);
-        const local =
-            [
-                'file:',
-                'data:',
-                'blob:',
-                'devtools:',
-                'chrome-extension:',
-            ].includes(url.protocol) ||
-            (devHost !== null && url.host === devHost);
-        if (!local)
-            log('Blocked a network request (this is a bug)', details.url);
-        callback({ cancel: !local });
-    });
+// Send a command to the window's shortcut registry (keeps menu items and keys in one place).
+function command(id: string): void {
+    BrowserWindow.getFocusedWindow()?.webContents.send('menu:command', id);
+}
+
+// macOS needs an app menu (and an Edit menu for copy/paste in text fields). Elsewhere the window
+// has no menu bar; everything is in the toolbar, the context menu and the shortcuts.
+function setMenu(): void {
+    if (process.platform !== 'darwin') {
+        Menu.setApplicationMenu(null);
+        return;
+    }
+    Menu.setApplicationMenu(
+        Menu.buildFromTemplate([
+            {
+                label: app.name,
+                submenu: [
+                    { role: 'about' },
+                    {
+                        label: 'Check for Updates…',
+                        click: () => void checkForUpdates(),
+                    },
+                    { type: 'separator' },
+                    {
+                        label: 'Settings…',
+                        accelerator: 'Cmd+,',
+                        click: () => command('settings'),
+                    },
+                    { type: 'separator' },
+                    { role: 'hide' },
+                    { role: 'hideOthers' },
+                    { role: 'unhide' },
+                    { type: 'separator' },
+                    { role: 'quit' },
+                ],
+            },
+            {
+                label: 'Edit',
+                submenu: [
+                    { role: 'undo' },
+                    { role: 'redo' },
+                    { type: 'separator' },
+                    { role: 'cut' },
+                    { role: 'copy' },
+                    { role: 'paste' },
+                    { role: 'selectAll' },
+                ],
+            },
+            { role: 'windowMenu' },
+            {
+                role: 'help',
+                submenu: [
+                    { label: 'User Guide', click: () => openLink('guide') },
+                    {
+                        label: 'Keyboard Shortcuts',
+                        click: () => command('shortcuts'),
+                    },
+                    { label: 'Report a Bug…', click: () => openLink('bug') },
+                ],
+            },
+        ])
+    );
 }
 
 process.on('uncaughtException', (err) => log('Uncaught error', err));
@@ -95,7 +140,9 @@ app.whenReady().then(async () => {
     blockNetwork();
     registerIpc();
     await loadSettings();
+    setMenu();
     createWindow();
+    maybeCheckWeekly();
 
     // macOS: re-create a window when the dock icon is clicked and none are open.
     app.on('activate', () => {

@@ -18,6 +18,9 @@ export interface Settings {
     // The welcome screen was seen, and the getting-around tips were dismissed.
     onboarded: boolean;
     tipsDismissed: boolean;
+    // Off by default: Drasil only goes online to check for updates when asked to.
+    autoCheckUpdates: boolean;
+    lastUpdateCheck: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -33,6 +36,8 @@ export const DEFAULT_SETTINGS: Settings = {
     keys: {},
     onboarded: false,
     tipsDismissed: false,
+    autoCheckUpdates: false,
+    lastUpdateCheck: 0,
 };
 
 const isAbsolute = (p: string): boolean =>
@@ -100,5 +105,11 @@ export function sanitizeSettings(raw: unknown): Settings {
         keys,
         onboarded: r.onboarded === true,
         tipsDismissed: r.tipsDismissed === true,
+        autoCheckUpdates: r.autoCheckUpdates === true,
+        lastUpdateCheck:
+            typeof r.lastUpdateCheck === 'number' &&
+            Number.isFinite(r.lastUpdateCheck)
+                ? r.lastUpdateCheck
+                : 0,
     };
 }

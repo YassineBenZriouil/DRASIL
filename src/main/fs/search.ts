@@ -1,5 +1,6 @@
 import type { WebContents } from 'electron';
 import type { Worker } from 'node:worker_threads';
+import { log } from '../log';
 import type { SearchEvent } from '../../shared/fs-types';
 import { currentSettings } from '../settings';
 import type { SearchRequest } from './search-worker';
@@ -18,7 +19,7 @@ function post(msg: SearchRequest): void {
             if (owner && !owner.isDestroyed())
                 owner.send('search:event', event);
         });
-        w.on('error', (err) => console.error('Search worker failed:', err));
+        w.on('error', (err) => log('Search worker failed:', err));
         w.on('exit', () => {
             worker = null;
             // End the running search honestly instead of leaving it "searching" forever.

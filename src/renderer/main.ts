@@ -813,6 +813,39 @@ window.addEventListener('keydown', (e) => {
     if (isDialogOpen() || settingsUI.isOpen || isWelcomeOpen()) return;
     keymap.handle(e);
 });
+// Commands picked from the macOS app menu run through the same registry as the keys.
+api.onMenuCommand((id) => {
+    if (!isDialogOpen() && !isWelcomeOpen())
+        keymap.all.find((c) => c.id === id)?.run();
+});
+
+// On macOS the Edit menu turns Cmd+C/X/V into copy/cut/paste events instead of key presses.
+// Outside text fields (and with no text selected) they act on the selected files.
+function editingText(e: Event): boolean {
+    const t = e.target as HTMLElement | null;
+    return (
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        Boolean(window.getSelection()?.toString())
+    );
+}
+document.addEventListener('copy', (e) => {
+    if (editingText(e) || !view.selection.size) return;
+    e.preventDefault();
+    ops.copy(selectedItems());
+});
+document.addEventListener('cut', (e) => {
+    if (editingText(e) || !view.selection.size) return;
+    e.preventDefault();
+    ops.cut(selectedItems());
+});
+document.addEventListener('paste', (e) => {
+    const f = folderTarget();
+    if (editingText(e) || !ops.hasClipboard || !f) return;
+    e.preventDefault();
+    void ops.paste(f);
+});
+
 // Mouse back/forward buttons.
 window.addEventListener('mouseup', (e) => {
     if (e.button === 3) goBack();
