@@ -2,7 +2,7 @@
 
 ## Getting started
 
-1. **Install** Drasil from the [download page](https://github.com/OWNER/drasil/releases/latest) and open it.
+1. **Install** Drasil from the [download page](https://github.com/YassineBenZriouil/DRASIL/releases/latest) and open it.
 2. **Pick a place to start**, such as Home, Documents or a drive. Drasil reads only that place, a little at a time, so the first view appears right away.
 3. **Explore:** click a folder to open it, drag empty space to move around, and scroll or pinch to zoom. Double-click a folder to make it the center of the tree. Right-click anything for actions.
 

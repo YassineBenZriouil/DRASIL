@@ -22,7 +22,7 @@ All 10 phases are complete: an Electron + TypeScript + electron-vite app with a 
 - `npm run build` — build to `out/`; `npm start` runs the build
 - `npm run typecheck`, `npm run lint`, `npm run format:check`
 - `npm run dist` / `npm run dist:dir` — installers / unpacked app in `dist/` (set `CSC_IDENTITY_AUTO_DISCOVERY=false` for unsigned local builds)
-- `OWNER` in `package.json` (and the docs) is a placeholder for the GitHub owner; see `docs/RELEASING.md`.
+- The repository is `github.com/YassineBenZriouil/DRASIL`, set in `package.json` (`homepage`, `repository`, `bugs`) and repeated in the docs.
 
 ## Architecture
 

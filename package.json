@@ -6,15 +6,15 @@
     "license": "MIT",
     "author": {
         "name": "The Drasil authors",
-        "email": "OWNER@users.noreply.github.com"
+        "email": "YassineBenZriouil@users.noreply.github.com"
     },
-    "homepage": "https://github.com/OWNER/drasil",
+    "homepage": "https://github.com/YassineBenZriouil/DRASIL",
     "repository": {
         "type": "git",
-        "url": "https://github.com/OWNER/drasil.git"
+        "url": "https://github.com/YassineBenZriouil/DRASIL.git"
     },
     "bugs": {
-        "url": "https://github.com/OWNER/drasil/issues"
+        "url": "https://github.com/YassineBenZriouil/DRASIL/issues"
     },
     "private": true,
     "main": "./out/main/index.js",

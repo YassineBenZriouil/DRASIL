@@ -2,7 +2,7 @@
 
 ## One-time setup
 
-1. **Repository name.** Replace `OWNER` with the real GitHub owner in `package.json` (`author.email`, `homepage`, `repository`, `bugs`), `README.md`, `docs/USER-GUIDE.md`, `docs/index.html` and `.github/ISSUE_TEMPLATE/config.yml`. In-app updates, bug reports and links all read the repository from `package.json`.
+1. **Repository.** The project lives at `github.com/YassineBenZriouil/DRASIL`. If it ever moves, update `package.json` (`author.email`, `homepage`, `repository`, `bugs`), `README.md`, `docs/USER-GUIDE.md`, `docs/index.html` and `.github/ISSUE_TEMPLATE/config.yml`. In-app updates, bug reports and links all read the repository from `package.json`.
 2. **Windows code signing.** Get a code-signing certificate (OV or EV, or Azure Trusted Signing). Add the repository secrets `WIN_CSC_LINK` (the `.pfx`, base64-encoded) and `WIN_CSC_KEY_PASSWORD`. Unsigned builds work, but SmartScreen warns about them.
 3. **macOS signing and notarization.** Join the Apple Developer Program. Export a "Developer ID Application" certificate as `.p12` and add the secrets `MAC_CSC_LINK` (base64) and `MAC_CSC_KEY_PASSWORD`. For notarization, add `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` (from appleid.apple.com) and `APPLE_TEAM_ID`.
 4. **Download page.** In the repository settings, turn on GitHub Pages from the `main` branch, `/docs` folder. `docs/index.html` is the download page.
