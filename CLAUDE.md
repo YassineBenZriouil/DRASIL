@@ -2,13 +2,32 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Rules (from the user — always follow)
+
+- Never run any git command unless the user explicitly asks for it.
+- Don't run tests. The user handles all testing.
+- When a phase is finished, reply with only: `Done`, followed by a short, simple list of what to test. Nothing else.
+
 ## Project state
 
-Pre-code. The repo holds only specs; there is no source, build, lint or test setup yet. Update this file with real commands once a stack is chosen.
+Phases 1–2 are complete: an Electron + TypeScript + electron-vite app with a lazy filesystem engine and a plain list view. Stack, engine design and reasons are in `TECHNICAL.md`.
 
 - `NON-TECHNICAL.md` — product vision and UX spec for **Drasil** (the product; the folder is named Reef). Read it before designing features.
-- `TECHNICAL.md` — empty; intended for the technical spec/architecture.
+- `TECHNICAL.md` — stack, architecture, known setup issues. Update it when a technical decision is made.
 - `PHASES.md` — the 10-phase roadmap to public release; each phase has exit criteria that gate the next.
+
+## Commands
+
+- `npm run dev` — run with hot reload
+- `npm run build` — build to `out/`; `npm start` runs the build
+- `npm run typecheck`, `npm run lint`, `npm run format:check`
+
+## Architecture
+
+- `src/main/` is the Electron main process and the only code that touches the filesystem.
+- `src/renderer/` is the sandboxed UI (no Node access). It reaches the disk only through `window.drasil` (`src/preload/`, typed in `src/shared/fs-types.ts`).
+- Directory listing runs in a worker thread (`src/main/fs/`), one level at a time, streamed as batches. Don't add recursive walks that follow links. Validate every IPC argument in `src/main/ipc.ts`.
+- The renderer CSP and navigation blocking in `src/main/index.ts` enforce the no-network rule. Don't loosen them.
 
 ## Product summary
 
