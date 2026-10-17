@@ -8,7 +8,7 @@
 | Filesystem backend | **Node.js** (`node:fs` in the main process, heavy scans in `worker_threads`)                                       | Same language as the UI. Async APIs keep the window responsive.                                                                                                                                                                             |
 | Language           | **TypeScript** (strict)                                                                                            | Type safety across the main and renderer processes.                                                                                                                                                                                         |
 | Build              | **electron-vite** (Vite)                                                                                           | Builds main + renderer, with hot reload in dev.                                                                                                                                                                                             |
-| Canvas rendering   | **WebGL via PixiJS** (added in Phase 3)                                                                            | Draws large numbers of nodes quickly, with GPU zoom and pan. Level-of-detail logic stays ours.                                                                                                                                              |
+| Canvas rendering   | **Canvas 2D** (no library)                                                                                         | Level of detail keeps the number of drawn nodes small, which Canvas 2D handles easily. Switch to WebGL (e.g. PixiJS) only if Phase 4 misses its frame-rate target.                                                                          |
 | UI panels          | Plain HTML/CSS + TypeScript for now. Add a UI framework only if the panels (inspector, search, settings) need one. | Avoid a dependency until it pays for itself.                                                                                                                                                                                                |
 | Lint / format      | ESLint (typescript-eslint) / Prettier                                                                              | Already used by the editor setup.                                                                                                                                                                                                           |
 
@@ -31,7 +31,13 @@ Flow: renderer `drasil.list(path, id)` → IPC `fs:list` (main checks the path i
 - **Locations** (`main/fs/locations.ts`): standard user folders, plus drives. Windows: present drive letters. macOS: `/` and `/Volumes/*`, without the startup-disk alias. Linux: `/` and mounts under `/media/$USER`, `/run/media/$USER` and `/mnt`.
 - **Known limits:** `hidden` only means dotfiles. Windows hidden/system attributes need a native call (planned with the hidden filter in Phase 7). macOS Finder aliases and Windows `.lnk` shortcuts are shown as plain files.
 
-The window currently shows a plain list view for exploring the engine (`src/renderer/main.ts`). Phase 3 makes the radial tree the main view. The list view stays as the accessible alternative.
+## Radial tree (Phase 3)
+
+- `renderer/model.ts` — `Tree`: the renderer's copy of what has been listed, plus which folders are open. It owns all listing requests and calls `onChange` after every batch or state change. Opening a folder that isn't `scanned`/`empty` lists it again, which also covers retry and reconnected drives.
+- `renderer/layout.ts` — radial layout. Each node gets a slice of its parent's wedge, sized by how many visible leaves it holds. Distance from the center is `depth × RING`. It only sets targets (`tx`, `ty`).
+- `renderer/view.ts` — `TreeView`: canvas drawing, pan/zoom, hit-testing, selection. Nodes animate towards their targets. With reduced motion turned on, they jump. Redraws happen only while something moves or loads.
+- Folder states are shown by shape, not just color: dashed ring = not scanned, spinning arc = loading, filled = opened, filled + outer ring = closed with contents, plain ring = empty, half filled = partial, ring with ✕ = no access (dashed = unavailable), triangle = error. The footer also describes the selection in text.
+- The Phase 2 list view was removed. The accessible alternative view gets rebuilt in Phase 8 on top of the same `Tree` model.
 
 ## Privacy guards (in place now)
 

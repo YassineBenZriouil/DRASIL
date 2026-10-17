@@ -1,14 +1,16 @@
-// Plain list view of the filesystem engine. The radial tree replaces it as the main view in Phase 3;
-// it stays as the accessible alternative view (Phase 8).
-import type { FsNode, ListEvent, NodeState } from '../shared/fs-types';
+import type { NodeState } from '../shared/fs-types';
+import { Tree, type TreeNode } from './model';
+import { TreeView } from './view';
 
 const api = window.drasil;
-const tree = document.getElementById('tree')!;
+const canvas = document.getElementById('world') as HTMLCanvasElement;
 const nav = document.getElementById('locations')!;
+const hint = document.getElementById('hint')!;
+const status = document.getElementById('status')!;
 
 const STATE_LABEL: Record<NodeState, string> = {
     unscanned: 'not scanned',
-    loading: 'loading…',
+    loading: 'loading',
     partial: 'partially scanned',
     scanned: '',
     empty: 'empty',
@@ -16,28 +18,6 @@ const STATE_LABEL: Record<NodeState, string> = {
     unavailable: 'unavailable',
     error: 'error',
 };
-
-interface DirView {
-    node: FsNode;
-    toggle: HTMLButtonElement;
-    status: HTMLSpanElement;
-    children: HTMLUListElement;
-    count: number;
-}
-
-let nextId = 1;
-const listings = new Map<number, DirView>();
-
-function el<K extends keyof HTMLElementTagNameMap>(
-    tag: K,
-    className?: string,
-    text?: string
-): HTMLElementTagNameMap[K] {
-    const e = document.createElement(tag);
-    if (className) e.className = className;
-    if (text) e.textContent = text;
-    return e;
-}
 
 function formatSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -50,132 +30,62 @@ function formatSize(bytes: number): string {
     return `${i === 0 ? n : n.toFixed(1)} ${units[i]}`;
 }
 
-function linkText(node: FsNode): string {
-    if (!node.link) return '';
-    const loop = node.link.loop ? ' (points to a parent folder)' : '';
-    return `→ ${node.link.target}${loop}`;
-}
-
-function renderStatus(view: DirView, cancelId?: number): void {
-    const { node, status } = view;
-    status.className = `status ${node.state}`;
-    let text = STATE_LABEL[node.state];
-    if (node.state === 'loading') text = `loading… ${view.count} items`;
-    else if (node.state === 'scanned') text = `${view.count} items`;
-    if (node.error) text += ` — ${node.error}`;
-    status.textContent = text;
-    if (cancelId !== undefined) {
-        const stop = el('button', '', 'Stop');
-        stop.addEventListener('click', () => api.cancel(cancelId));
-        status.append(' ', stop);
+// A text description of the selection, so nothing depends on reading shapes or colors.
+function describe(t: TreeNode): string {
+    const { node } = t;
+    const parts: string[] = [];
+    if (node.kind === 'directory') {
+        if (node.state === 'scanned') parts.push(`${t.count} items`);
+        else if (node.state === 'loading')
+            parts.push(`loading, ${t.count} items so far`);
+        else parts.push(STATE_LABEL[node.state]);
+    } else {
+        if (node.size !== undefined) parts.push(formatSize(node.size));
+        if (node.state !== 'scanned') parts.push(STATE_LABEL[node.state]);
     }
+    if (node.link)
+        parts.push(
+            `link to ${node.link.target}${node.link.loop ? ' (a parent folder)' : ''}`
+        );
+    if (node.hidden) parts.push('hidden');
+    if (node.error) parts.push(node.error);
+    return parts.join(' · ');
 }
 
-function startListing(view: DirView): void {
-    const id = nextId++;
-    view.children.replaceChildren();
-    view.count = 0;
-    view.node.state = 'loading';
-    view.node.error = undefined;
-    listings.set(id, view);
-    renderStatus(view, id);
-    api.list(view.node.path, id).catch((err: unknown) => {
-        listings.delete(id);
-        view.node.state = 'error';
-        view.node.error = String(err);
-        renderStatus(view);
-    });
-}
-
-function setExpanded(view: DirView, expanded: boolean): void {
-    view.toggle.setAttribute('aria-expanded', String(expanded));
-    view.toggle.firstChild!.textContent = expanded ? '▾ ' : '▸ ';
-    view.children.hidden = !expanded;
-}
-
-function renderNode(node: FsNode): HTMLLIElement {
-    const li = el('li', node.hidden ? 'hidden-item' : '');
-    const row = el('div', 'row');
-    li.append(row);
-
-    if (node.kind !== 'directory') {
-        row.append(el('span', '', node.name));
-        const meta = [
-            node.size !== undefined ? formatSize(node.size) : '',
-            linkText(node),
-        ].filter(Boolean);
-        if (meta.length) row.append(el('span', 'meta', meta.join(' ')));
-        if (node.error)
-            row.append(el('span', `status ${node.state}`, node.error));
-        return li;
-    }
-
-    const toggle = el('button');
-    toggle.append('▸ ', node.name);
-    const status = el('span');
-    const children = el('ul');
-    const view: DirView = { node, toggle, status, children, count: 0 };
-    row.append(toggle);
-    if (node.link) row.append(el('span', 'meta', linkText(node)));
-    row.append(status);
-    li.append(children);
-    setExpanded(view, false);
-    renderStatus(view);
-
-    toggle.addEventListener('click', () => {
-        const expanded = toggle.getAttribute('aria-expanded') === 'true';
-        if (node.state === 'loading') return setExpanded(view, !expanded);
-        // Retry anything not fully known: unscanned, partial, failed, or a drive that came back.
-        const known = node.state === 'scanned' || node.state === 'empty';
-        if (!expanded && !known) startListing(view);
-        setExpanded(view, !expanded);
-    });
-    return li;
-}
-
-api.onListEvent((event: ListEvent) => {
-    const view = listings.get(event.id);
-    if (!view) return;
-    if (event.type === 'batch') {
-        const frag = document.createDocumentFragment();
-        for (const node of event.nodes) frag.append(renderNode(node));
-        view.children.append(frag);
-        view.count += event.nodes.length;
-        renderStatus(view, event.id);
+function renderStatus(t: TreeNode | null): void {
+    if (!t) {
+        status.textContent = '';
         return;
     }
-    listings.delete(event.id);
-    view.node.state = event.state;
-    view.node.error = event.error;
-    view.count = event.count;
-    renderStatus(view);
-});
-
-function openRoot(path: string, name: string): void {
-    for (const id of listings.keys()) api.cancel(id);
-    listings.clear();
-    const root = renderNode({
-        path,
-        name,
-        kind: 'directory',
-        state: 'unscanned',
-        hidden: false,
-    });
-    const list = el('ul');
-    list.append(root);
-    tree.replaceChildren(list);
-    root.querySelector('button')!.click();
+    const name = document.createElement('strong');
+    name.textContent = t.node.name;
+    const path = document.createElement('span');
+    path.className = 'path';
+    path.textContent = t.node.path;
+    status.replaceChildren(name, ` — ${describe(t)} — `, path);
 }
+
+const tree = new Tree(() => {
+    view.relayout();
+    renderStatus(view.selected);
+});
+const view = new TreeView(canvas, tree, renderStatus);
+
+document.getElementById('fit')!.addEventListener('click', () => view.fit());
 
 api.locations().then((locations) => {
     for (const loc of locations) {
-        const button = el('button', '', loc.name);
+        const button = document.createElement('button');
+        button.textContent = loc.name;
         button.title = loc.path;
         button.setAttribute('aria-pressed', 'false');
         button.addEventListener('click', () => {
             for (const b of nav.querySelectorAll('button'))
                 b.setAttribute('aria-pressed', String(b === button));
-            openRoot(loc.path, loc.path);
+            hint.hidden = true;
+            view.select(tree.setRoot(loc.path, loc.path));
+            view.fit();
+            canvas.focus();
         });
         nav.append(button);
     }

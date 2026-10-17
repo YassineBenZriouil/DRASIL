@@ -72,47 +72,58 @@ button[aria-pressed='true'] {
 }
 
 main {
+    position: relative;
     flex: 1;
-    overflow: auto;
-    padding: 8px 16px;
+    min-height: 0;
 }
 
-ul {
-    list-style: none;
+canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    touch-action: none;
+}
+
+canvas:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.hint {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
     margin: 0;
-    padding-left: 20px;
+    color: var(--muted);
+    pointer-events: none;
 }
 
-main > ul {
-    padding-left: 0;
-}
-
-li > .row {
+footer {
     display: flex;
-    gap: 8px;
-    align-items: baseline;
-}
-
-.hint,
-.meta {
-    color: var(--muted);
-}
-
-.status {
+    justify-content: space-between;
+    gap: 16px;
+    padding: 6px 16px;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
     font-size: 12px;
+}
+
+#status {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#status .path {
     color: var(--muted);
 }
 
-.status.inaccessible,
-.status.unavailable,
-.status.partial {
-    color: var(--warn);
-}
-
-.status.error {
-    color: var(--bad);
-}
-
-.hidden-item {
-    opacity: 0.6;
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    color: var(--muted);
 }

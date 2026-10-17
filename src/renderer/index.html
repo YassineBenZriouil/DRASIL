@@ -13,10 +13,30 @@
         <header>
             <h1>Drasil</h1>
             <nav id="locations" aria-label="Locations"></nav>
+            <button id="fit" title="Fit the tree on screen (Home)">
+                Re-center
+            </button>
         </header>
-        <main id="tree" aria-label="Files">
-            <p class="hint">Choose a location to start exploring.</p>
+        <main>
+            <canvas
+                id="world"
+                tabindex="0"
+                aria-label="File tree. Click a folder to open or close it. Drag to move, scroll to zoom. Enter opens the selected folder, Home re-centers, plus and minus zoom."
+            ></canvas>
+            <p id="hint" class="hint">Choose a location to start exploring.</p>
         </main>
+        <footer>
+            <div id="status" aria-live="polite"></div>
+            <div class="legend" aria-label="Folder shapes">
+                <span>◌ not scanned</span>
+                <span>○ empty</span>
+                <span>● opened</span>
+                <span>◉ closed</span>
+                <span>◐ partial</span>
+                <span>⊗ no access</span>
+                <span>△ error</span>
+            </div>
+        </footer>
         <script type="module" src="./main.ts"></script>
     </body>
 </html>
