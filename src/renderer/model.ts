@@ -1,4 +1,5 @@
 import type { FsNode, ListEvent, SizeInfo } from '../shared/fs-types';
+import { baseName, isInside } from '../shared/paths';
 
 export interface TreeNode {
     node: FsNode;
@@ -88,6 +89,12 @@ export function isKnown(t: TreeNode): boolean {
 
 export type ChangeKind = 'tree' | 'sizes';
 
+function contains(ancestor: TreeNode, t: TreeNode): boolean {
+    for (let n: TreeNode | null = t; n; n = n.parent)
+        if (n === ancestor) return true;
+    return false;
+}
+
 // The renderer's view of the filesystem: what has been listed, which folders are open,
 // and the folder sizes calculated so far.
 export class Tree {
@@ -96,9 +103,14 @@ export class Tree {
     loaded = 0;
     sizes = new Map<string, SizeInfo>();
     sizeProgress = { scanned: 0, done: false };
+    // Called when reveal() reaches its target (or the deepest folder it could get to).
+    onReveal: (t: TreeNode, found: boolean) => void = () => {};
     private nextId = 1;
     private listings = new Map<number, TreeNode>();
     private withPending = new Set<TreeNode>();
+    // A previous root to reuse when it shows up in a listing (after going up a level).
+    private adopt: TreeNode | null = null;
+    private revealing: string | null = null;
 
     constructor(private onChange: (kind: ChangeKind) => void) {
         api.onListEvent((event) => this.handle(event));
@@ -110,27 +122,53 @@ export class Tree {
         });
     }
 
-    setRoot(path: string, name: string): TreeNode {
-        for (const id of this.listings.keys()) api.cancel(id);
-        this.listings.clear();
-        this.withPending.clear();
-        this.sizes.clear();
-        this.sizeProgress = { scanned: 0, done: false };
-        this.loaded = 1;
-        this.root = makeNode(
+    get activeListings(): number {
+        return this.listings.size;
+    }
+
+    // Start a fresh tree at `path`. If `adopt` is a folder directly inside it,
+    // that existing branch (with what's open in it) is reused instead of re-listed.
+    setRoot(path: string, adopt: TreeNode | null = null): TreeNode {
+        const root = makeNode(
             {
                 path,
-                name,
+                name: baseName(path),
                 kind: 'directory',
                 state: 'unscanned',
                 hidden: false,
             },
             null
         );
-        void api.startSizes(path);
-        api.watchSizes([path]);
-        this.expand(this.root);
-        return this.root;
+        this.useRoot(root);
+        this.adopt = adopt;
+        this.expand(root);
+        return root;
+    }
+
+    // Make an existing node the root, keeping everything already listed and opened under it.
+    useRoot(t: TreeNode): void {
+        this.root = t;
+        this.revealing = null;
+        this.adopt = null;
+        // Listings outside the new root aren't needed. They stay tracked so their final
+        // 'partial' state still lands on the node, which may come back through history.
+        for (const [id, n] of this.listings)
+            if (!contains(t, n)) api.cancel(id);
+        this.sizes.clear();
+        this.sizeProgress = { scanned: 0, done: false };
+        this.loaded = 1 + descendants(t);
+        void api.startSizes(t.node.path);
+        const dirs: string[] = [];
+        for (const d of this.visibleFrom(t, true))
+            if (d.node.kind === 'directory') dirs.push(d.node.path);
+        this.watch(dirs);
+        this.onChange('tree');
+    }
+
+    // Open folders one level at a time down to `path`, listing them as needed.
+    reveal(path: string): void {
+        this.revealing = path;
+        this.continueReveal();
     }
 
     toggle(t: TreeNode): void {
@@ -168,22 +206,52 @@ export class Tree {
             t.pending = [];
         }
         this.withPending.clear();
-        for (let i = 0; i < dirs.length; i += 5000)
-            api.watchSizes(dirs.slice(i, i + 5000));
+        this.watch(dirs);
     }
 
     *visible(): Generator<TreeNode> {
         if (this.root) yield* this.visibleFrom(this.root);
     }
 
-    private *visibleFrom(t: TreeNode): Generator<TreeNode> {
+    private *visibleFrom(t: TreeNode, all = false): Generator<TreeNode> {
         yield t;
-        if (t.expanded) for (const c of t.children) yield* this.visibleFrom(c);
+        if (t.expanded || all)
+            for (const c of t.children) yield* this.visibleFrom(c, all);
+    }
+
+    private watch(dirs: string[]): void {
+        for (let i = 0; i < dirs.length; i += 5000)
+            api.watchSizes(dirs.slice(i, i + 5000));
+    }
+
+    private continueReveal(): void {
+        const target = this.revealing;
+        if (!target || !this.root) return;
+        let t = this.root;
+        if (isInside(target, t.node.path)) {
+            for (;;) {
+                if (t.node.path === target || t.node.kind !== 'directory')
+                    break;
+                this.expand(t);
+                const next =
+                    t.children.find((c) => isInside(target, c.node.path)) ??
+                    t.pending.find((c) => isInside(target, c.node.path));
+                if (next) {
+                    t = next;
+                    continue;
+                }
+                // Still listing: wait for more entries.
+                if (t.node.state === 'loading') return;
+                break;
+            }
+        }
+        this.revealing = null;
+        this.onReveal(t, t.node.path === target);
     }
 
     private list(t: TreeNode): void {
         const id = this.nextId++;
-        this.loaded -= descendants(t);
+        if (this.root && contains(this.root, t)) this.loaded -= descendants(t);
         t.children = [];
         t.pending = [];
         t.count = 0;
@@ -201,11 +269,20 @@ export class Tree {
     private handle(event: ListEvent): void {
         const t = this.listings.get(event.id);
         if (!t) return;
+        const counted = this.root !== null && contains(this.root, t);
         if (event.type === 'batch') {
-            for (const n of event.nodes) t.pending.push(makeNode(n, t));
+            for (const n of event.nodes) {
+                const old = this.adopt;
+                if (old && n.path === old.node.path) {
+                    old.parent = t;
+                    t.pending.push(old);
+                    this.adopt = null;
+                    if (counted) this.loaded += descendants(old);
+                } else t.pending.push(makeNode(n, t));
+            }
             this.withPending.add(t);
             t.count += event.nodes.length;
-            this.loaded += event.nodes.length;
+            if (counted) this.loaded += event.nodes.length;
         } else {
             this.listings.delete(event.id);
             t.node.state = event.state;
@@ -213,5 +290,6 @@ export class Tree {
             t.count = event.count;
         }
         this.onChange('tree');
+        this.continueReveal();
     }
 }

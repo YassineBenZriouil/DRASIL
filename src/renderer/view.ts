@@ -1,3 +1,4 @@
+import { CATEGORY_COLOR, fileCategory } from './filetypes';
 import { layout } from './layout';
 import type { Tree, TreeNode } from './model';
 
@@ -13,35 +14,6 @@ const COLORS = {
     select: '#ffffff',
     hover: 'rgba(255, 255, 255, 0.45)',
 };
-
-const FILE_COLORS: Record<string, string> = {
-    image: '#c792ea',
-    video: '#f78c6c',
-    audio: '#ffcb6b',
-    document: '#82aaff',
-    archive: '#d4a373',
-    code: '#89ddff',
-    app: '#ff5370',
-    other: '#9aa7a1',
-};
-
-const EXT_CATEGORY: Record<string, string> = {};
-for (const [cat, exts] of Object.entries({
-    image: 'png jpg jpeg gif webp svg bmp tif tiff heic avif ico raw',
-    video: 'mp4 mkv mov avi webm wmv m4v',
-    audio: 'mp3 wav flac aac ogg m4a opus wma',
-    document: 'pdf doc docx txt md rtf odt xls xlsx ppt pptx csv epub',
-    archive: 'zip rar 7z tar gz bz2 xz zst iso dmg',
-    code: 'js ts tsx jsx py c cpp h hpp cs rs go java kt rb php json yml yaml toml html css sh ps1 bat',
-    app: 'exe msi app apk deb rpm appimage dll so dylib',
-}))
-    for (const ext of exts.split(' ')) EXT_CATEGORY[ext] = cat;
-
-function fileColor(name: string): string {
-    const dot = name.lastIndexOf('.');
-    const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
-    return FILE_COLORS[EXT_CATEGORY[ext] ?? 'other']!;
-}
 
 const TAU = Math.PI * 2;
 const mod = (a: number, m: number): number => ((a % m) + m) % m;
@@ -96,11 +68,14 @@ export class TreeView {
     private lastFrame = 0;
     private fps = 0;
     private frameCost = 0;
+    private cam: { scale: number; ox: number; oy: number } | null = null;
 
     constructor(
         private canvas: HTMLCanvasElement,
         private tree: Tree,
-        private onSelect: (t: TreeNode | null) => void
+        private onSelect: (t: TreeNode | null) => void,
+        // Double-click or Enter on an item: files open in their app, folders become the root.
+        private onOpen: (t: TreeNode) => void
     ) {
         this.ctx = canvas.getContext('2d')!;
         new ResizeObserver(() => this.resize()).observe(canvas);
@@ -124,10 +99,58 @@ export class TreeView {
         this.runLayout(performance.now());
         const r = (this.tree.root?.maxRadius ?? 0) + 80;
         const s = Math.min(this.width, this.height) / (2 * r);
-        this.scale = Math.min(Math.max(s, MIN_SCALE), 1.5);
-        this.ox = this.width / 2;
-        this.oy = this.height / 2;
+        this.animateTo(clampScale(Math.min(s, 1.5)), 0, 0);
+    }
+
+    // Glide to `t`, zooming in if needed so it and its siblings get readable labels.
+    centerOn(t: TreeNode): void {
+        this.runLayout(performance.now());
+        const arc = (t.a1 - t.a0) * t.radius;
+        const need = t === this.tree.root ? 0 : (LABEL_PX * 1.5) / arc;
+        this.animateTo(clampScale(Math.max(this.scale, need)), t.tx, t.ty);
+    }
+
+    // Move the camera so world point (wx, wy) ends up in the middle of the screen at `scale`.
+    private animateTo(scale: number, wx: number, wy: number): void {
+        const ox = this.width / 2 - wx * scale;
+        const oy = this.height / 2 - wy * scale;
+        if (this.reducedMotion.matches) {
+            this.scale = scale;
+            this.ox = ox;
+            this.oy = oy;
+            this.cam = null;
+        } else this.cam = { scale, ox, oy };
         this.invalidate();
+    }
+
+    // One step of the camera glide: zoom geometrically and move the world point at the
+    // screen center, so the motion feels even at any zoom level. Returns true while moving.
+    private stepCamera(): boolean {
+        const cam = this.cam;
+        if (!cam) return false;
+        const hw = this.width / 2;
+        const hh = this.height / 2;
+        const cx = (hw - this.ox) / this.scale;
+        const cy = (hh - this.oy) / this.scale;
+        const tx = (hw - cam.ox) / cam.scale;
+        const ty = (hh - cam.oy) / cam.scale;
+        const ratio = cam.scale / this.scale;
+        if (
+            Math.abs(Math.log(ratio)) < 0.01 &&
+            Math.hypot(tx - cx, ty - cy) * this.scale < 0.5
+        ) {
+            this.scale = cam.scale;
+            this.ox = cam.ox;
+            this.oy = cam.oy;
+            this.cam = null;
+            return false;
+        }
+        this.scale *= Math.pow(ratio, 0.2);
+        const nx = cx + (tx - cx) * 0.2;
+        const ny = cy + (ty - cy) * 0.2;
+        this.ox = hw - nx * this.scale;
+        this.oy = hh - ny * this.scale;
+        return true;
     }
 
     toggleStats(): void {
@@ -165,7 +188,7 @@ export class TreeView {
     private frame = (time: number): void => {
         this.raf = 0;
         const start = performance.now();
-        let busy = this.stats;
+        let busy = this.stepCamera() || this.stats;
 
         if (this.layoutDirty) {
             const wait = Math.max(MIN_LAYOUT_MS, 2 * this.layoutCost);
@@ -308,13 +331,15 @@ export class TreeView {
             max
         );
         // Don't let siblings overlap each other.
-        if (t.parent)
+        if (t !== this.tree.root)
             px = Math.max(Math.min(px, this.siblingPx(t) * 0.45), MIN_PX);
         return px;
     }
 
     private siblingPx(t: TreeNode): number {
-        return t.parent ? (t.a1 - t.a0) * t.radius * this.scale : Infinity;
+        return t !== this.tree.root
+            ? (t.a1 - t.a0) * t.radius * this.scale
+            : Infinity;
     }
 
     private toScreen(t: TreeNode): [number, number] {
@@ -399,7 +424,8 @@ export class TreeView {
     private drawLabel(t: TreeNode): void {
         const { ctx } = this;
         const focus = t === this.selected || t === this.hover;
-        if (!focus && t.parent && this.siblingPx(t) < LABEL_PX) return;
+        const isRoot = t === this.tree.root;
+        if (!focus && !isRoot && this.siblingPx(t) < LABEL_PX) return;
         const r = this.nodePx(t);
         // Room before the children's ring; leaves can run outward freely.
         const room =
@@ -418,9 +444,10 @@ export class TreeView {
         ctx.fillStyle = COLORS.label;
         ctx.save();
         ctx.translate(sx, sy);
-        if (!t.parent) {
+        if (isRoot) {
+            // The root shows its full path, so it's always clear where the tree starts.
             ctx.textAlign = 'center';
-            ctx.fillText(text, 0, r + 12);
+            ctx.fillText(t.node.path, 0, r + 12);
         } else {
             // Read along the branch, flipped on the left so text is never upside down.
             const left = Math.cos(t.angle) < 0;
@@ -479,7 +506,7 @@ export class TreeView {
             ctx.stroke();
             ctx.setLineDash([]);
         } else {
-            ctx.fillStyle = fileColor(t.node.name);
+            ctx.fillStyle = CATEGORY_COLOR[fileCategory(t.node.name)];
             ctx.fill();
         }
     }
@@ -625,6 +652,7 @@ export class TreeView {
     }
 
     private zoomAt(sx: number, sy: number, factor: number): void {
+        this.cam = null;
         const next = Math.min(
             Math.max(this.scale * factor, MIN_SCALE),
             MAX_SCALE
@@ -653,6 +681,7 @@ export class TreeView {
         c.addEventListener('pointerdown', (e) => {
             if (e.button !== 0) return;
             c.setPointerCapture(e.pointerId);
+            this.cam = null;
             drag = {
                 x: e.clientX,
                 y: e.clientY,
@@ -708,6 +737,11 @@ export class TreeView {
             }
             this.select(null);
         });
+        c.addEventListener('dblclick', (e) => {
+            const [sx, sy] = local(e);
+            const hit = this.hitTest(sx, sy);
+            if (hit) this.onOpen(hit);
+        });
         c.addEventListener('pointerleave', () => {
             if (this.hover) {
                 this.hover = null;
@@ -727,7 +761,10 @@ export class TreeView {
         );
         c.addEventListener('keydown', (e) => {
             const t = this.selected;
-            if ((e.key === 'Enter' || e.key === ' ') && t) {
+            if (e.key === 'Enter' && t && t.node.kind !== 'directory') {
+                e.preventDefault();
+                this.onOpen(t);
+            } else if ((e.key === 'Enter' || e.key === ' ') && t) {
                 e.preventDefault();
                 this.tree.toggle(t);
             } else if (e.key === 'Home') {
@@ -741,6 +778,10 @@ export class TreeView {
             }
         });
     }
+}
+
+function clampScale(s: number): number {
+    return Math.min(Math.max(s, MIN_SCALE), MAX_SCALE);
 }
 
 // First child whose wedge ends at or after angle `a`.

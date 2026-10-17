@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-Phases 1–4 are complete: an Electron + TypeScript + electron-vite app with a lazy filesystem engine a background folder-size worker, and a Canvas 2D radial tree with culling and level of detail (`src/renderer/model.ts`, `layout.ts`, `view.ts`). Stack, engine design and reasons are in `TECHNICAL.md`.
+Phases 1–5 are complete: an Electron + TypeScript + electron-vite app with a lazy filesystem engine a background folder-size worker, and a Canvas 2D radial tree with culling and level of detail (`src/renderer/model.ts`, `layout.ts`, `view.ts`), plus history, path bar and inspector (`src/renderer/main.ts`). Stack, engine design and reasons are in `TECHNICAL.md`.
 
 - `NON-TECHNICAL.md` — product vision and UX spec for **Drasil** (the product; the folder is named Reef). Read it before designing features.
 - `TECHNICAL.md` — stack, architecture, known setup issues. Update it when a technical decision is made.

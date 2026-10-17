@@ -42,10 +42,41 @@ h1 {
     letter-spacing: 0.2em;
 }
 
-nav {
+nav,
+.group {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+}
+
+.group.end {
+    margin-left: auto;
+}
+
+button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+#crumbs {
+    align-items: center;
+    gap: 2px;
+    padding: 4px 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    min-height: 22px;
+}
+
+#crumbs .sep {
+    color: var(--muted);
+}
+
+#crumbs .outside {
+    color: var(--muted);
+}
+
+#crumbs [aria-current] {
+    font-weight: 600;
 }
 
 button {
@@ -72,9 +103,67 @@ button[aria-pressed='true'] {
 }
 
 main {
-    position: relative;
+    display: flex;
     flex: 1;
     min-height: 0;
+}
+
+.stage {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+
+#inspector {
+    flex: none;
+    width: 300px;
+    overflow: auto;
+    padding: 12px 16px;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+}
+
+#inspector h2 {
+    margin: 0 0 8px;
+    font-size: 15px;
+    overflow-wrap: anywhere;
+}
+
+#inspector dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    margin: 0 0 12px;
+    font-size: 13px;
+}
+
+#inspector dt {
+    color: var(--muted);
+}
+
+#inspector dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+#inspector .actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+#inspector .actions button {
+    border-color: var(--line);
+}
+
+.message {
+    color: var(--warn);
+    font-size: 13px;
+}
+
+.hint-inline {
+    color: var(--muted);
 }
 
 canvas {
@@ -119,7 +208,7 @@ footer {
     white-space: nowrap;
 }
 
-#size-progress {
+#activity {
     flex: none;
     color: var(--muted);
 }

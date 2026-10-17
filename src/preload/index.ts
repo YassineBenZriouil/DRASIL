@@ -17,6 +17,8 @@ const api: DrasilApi = {
     startSizes: (root) => ipcRenderer.invoke('size:start', root),
     watchSizes: (paths) => ipcRenderer.send('size:watch', paths),
     onSizeEvent: (callback) => subscribe('size:event', callback),
+    open: (path) => ipcRenderer.invoke('shell:open', path),
+    reveal: (path) => ipcRenderer.invoke('shell:reveal', path),
 };
 
 contextBridge.exposeInMainWorld('drasil', api);

@@ -12,22 +12,54 @@
     <body>
         <header>
             <h1>Drasil</h1>
+            <div class="group" role="toolbar" aria-label="History">
+                <button id="back" title="Back (Alt+Left)" disabled>
+                    ← Back
+                </button>
+                <button id="forward" title="Forward (Alt+Right)" disabled>
+                    Forward →
+                </button>
+                <button id="up" title="Parent folder (Alt+Up)" disabled>
+                    ↑ Up
+                </button>
+            </div>
             <nav id="locations" aria-label="Locations"></nav>
-            <button id="fit" title="Fit the tree on screen (Home)">
-                Re-center
-            </button>
+            <div class="group end" role="toolbar" aria-label="View">
+                <button id="fit" title="See the whole tree (Home)">
+                    Overview
+                </button>
+                <button id="locate" title="Center on the selection (C)">
+                    Locate
+                </button>
+                <button
+                    id="toggle-inspector"
+                    title="Show or hide details (I)"
+                    aria-pressed="true"
+                    aria-controls="inspector"
+                >
+                    Details
+                </button>
+            </div>
         </header>
+        <nav id="crumbs" aria-label="Path"></nav>
         <main>
-            <canvas
-                id="world"
-                tabindex="0"
-                aria-label="File tree. Click a folder to open or close it. Drag to move, scroll to zoom. Enter opens the selected folder, Home re-centers, plus and minus zoom, F2 shows performance stats."
-            ></canvas>
-            <p id="hint" class="hint">Choose a location to start exploring.</p>
+            <div class="stage">
+                <canvas
+                    id="world"
+                    tabindex="0"
+                    aria-label="File tree. Click a folder to open or close it, double-click to make it the root. Double-click a file to open it. Drag to move, scroll to zoom. Enter opens, Home shows the whole tree, C centers the selection, plus and minus zoom, F2 shows performance stats."
+                ></canvas>
+                <p id="hint" class="hint">
+                    Choose a location to start exploring.
+                </p>
+            </div>
+            <aside id="inspector" aria-label="Details">
+                <p class="hint-inline">Select a file or folder.</p>
+            </aside>
         </main>
         <footer>
             <div id="status" aria-live="polite"></div>
-            <div id="size-progress"></div>
+            <div id="activity"></div>
             <div class="legend" aria-label="Folder shapes">
                 <span>◌ not scanned</span>
                 <span>○ empty</span>

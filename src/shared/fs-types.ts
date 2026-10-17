@@ -71,4 +71,7 @@ export interface DrasilApi {
     // Asks for size updates of these folders (they are calculated first).
     watchSizes(paths: string[]): void;
     onSizeEvent(callback: (event: SizeEvent) => void): () => void;
+    // Open with the default app / show in the system file manager. Resolve to an error message, or ''.
+    open(path: string): Promise<string>;
+    reveal(path: string): Promise<string>;
 }

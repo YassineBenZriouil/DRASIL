@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron';
+import { ipcMain, shell } from 'electron';
+import { lstat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { cancel, list } from './fs/engine';
 import { getLocations } from './fs/locations';
@@ -8,6 +9,20 @@ const isId = (v: unknown): v is number => Number.isSafeInteger(v);
 const isPath = (v: unknown): v is string =>
     typeof v === 'string' && isAbsolute(v);
 const MAX_WATCH = 10_000;
+
+// Returns an error message for the UI, or '' on success.
+async function withExisting(
+    path: unknown,
+    action: (path: string) => Promise<string> | void
+): Promise<string> {
+    if (!isPath(path)) return 'Invalid path';
+    try {
+        await lstat(path);
+    } catch {
+        return 'This item no longer exists';
+    }
+    return (await action(path)) ?? '';
+}
 
 export function registerIpc(): void {
     ipcMain.handle('fs:locations', () => getLocations());
@@ -34,4 +49,12 @@ export function registerIpc(): void {
         )
             watchSizes(paths, event.sender);
     });
+
+    ipcMain.handle('shell:open', (_, path: unknown) =>
+        withExisting(path, (p) => shell.openPath(p))
+    );
+
+    ipcMain.handle('shell:reveal', (_, path: unknown) =>
+        withExisting(path, (p) => shell.showItemInFolder(p))
+    );
 }

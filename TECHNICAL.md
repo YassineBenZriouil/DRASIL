@@ -48,6 +48,16 @@ Flow: renderer `drasil.list(path, id)` → IPC `fs:list` (main checks the path i
 - **Folder sizes:** `main/fs/size-worker.ts` (its own worker, via `main/fs/sizes.ts`, IPC `size:start` / `size:watch` / `size:event`). Starting a root begins one walk of it. Folders the UI is showing are "watched": they are walked first and get updates every 300 ms. The walk never follows links. It skips virtual filesystems (`/proc`, `/sys`, `/dev`, `/run` on Linux; `/dev`, `/System/Volumes`, `/Volumes` on macOS). Only folders within 2 levels of the root, plus watched folders, are cached, which keeps memory bounded. States: `complete`; `estimate` (still walking, a lower bound); `incomplete` (finished, but something couldn't be read, also a lower bound). The UI says "at least …" for the last two.
 - **Performance budget:** 60 fps (≤ 16 ms per frame) while panning and zooming, with 1M+ items loaded; renderer heap ≤ 1.5 GB at 1M loaded items. F2 on the canvas shows fps, frame time, layout time, drawn and loaded counts, and heap. `npm run make-test-tree -- <empty folder> [files] [perFolder]` creates a test tree (default 1M empty files, 100 per folder; set `perFolder` = `files` for one flat folder).
 
+## Navigation and orientation (Phase 5)
+
+- **Roots and history** (`renderer/main.ts`): each history entry is a live root `TreeNode` plus what was selected, so Back/Forward restore branches exactly as they were left open (max 50 entries). `Tree.useRoot(node)` makes an existing node the root ("Show as root", double-click a folder). `Tree.setRoot(path, adopt)` starts a fresh tree. When going up, the old root is passed as `adopt`, and that branch is reused when it appears in the parent's listing. The view treats `t === tree.root` as the root; a focused branch still has its `parent`.
+- **Reveal:** `Tree.reveal(path)` opens folders one level at a time down to `path`, waiting for listings as needed. Then it calls `onReveal`. The path bar uses it for jumps above the root. Phase 7 search will use it too.
+- **Path helpers:** `src/shared/paths.ts` works without `node:path` (the renderer is sandboxed). It handles Windows drive roots, POSIX `/` and UNC share roots.
+- **Camera:** `TreeView.centerOn(t)` / `fit()` glide there: geometric zoom, linear movement of the world point at the screen center. With reduced motion, they jump. Any drag, wheel or zoom cancels a glide.
+- **Inspector** (right panel, toggle with I): it is rebuilt only when its layout changes. Otherwise values are updated in place, because sizes update several times a second and rebuilding mid-click would swallow the click.
+- **Open / reveal:** IPC `shell:open` / `shell:reveal` (`shell.openPath` / `shell.showItemInFolder`). The main process checks that the path is absolute and still exists. Both return an error message or `''`.
+- **Keys:** Alt+←/→ back/forward (and mouse buttons 4/5), Alt+↑ or Backspace up, Home overview, C center on the selection, I details, Enter open/toggle, double-click open.
+
 ## Privacy guards (in place now)
 
 - Strict Content-Security-Policy in `src/renderer/index.html`. Only the local dev server is allowed as a connection.
